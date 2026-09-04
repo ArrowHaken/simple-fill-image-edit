@@ -18,8 +18,9 @@ Artifact 入口是 `artifact/manifest.json`，实际页面由现有 FastAPI 工�
 - 已验证上传、SAM3 目标分割、CatsCo JSON 原生蒙版 Image2、结果回填。
 - 已验证编辑范围外像素不被提交结果污染。
 - 已部署到天选打工仔的独立 systemd 服务（仅监听 `127.0.0.1:20001`）。
-- 已注册到天选打工仔的 `cloud-html-artifact` 索引，正式 Artifact 当前为 v3；静态页面通过同域 API 路由调用该服务。
+- 已注册到天选打工仔的 `cloud-html-artifact` 索引，正式 Artifact 当前为 v4；静态页面通过同域 API 路由调用该服务。
 - 已按交接包白猫基线补强短句替换 Prompt，并缓存不可变媒体、减少重复缩略图请求和任务轮询负载。
+- v4 增加画布拖拽矩形框选；对标题/装饰文字，SAM3 失败时保留用户框选矩形作为空间蒙版继续流程。
 - Artifact 包不包含 API key、SSH 密钥、真实图片和历史任务数据。
 
 ## 当前交付入口
