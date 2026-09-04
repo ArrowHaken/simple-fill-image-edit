@@ -147,6 +147,51 @@ class MaskedImage2Tests(unittest.TestCase):
             for name, value in old.items():
                 object.__setattr__(settings, name, value)
 
+    def test_catsco_json_gateway_sends_data_urls_and_route_policy(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old = {
+            "masked_image2_base_url": settings.masked_image2_base_url,
+            "masked_image2_api_key": settings.masked_image2_api_key,
+            "masked_image2_api_key_file": settings.masked_image2_api_key_file,
+            "masked_image2_transport": settings.masked_image2_transport,
+            "masked_image2_auth_scheme": settings.masked_image2_auth_scheme,
+            "masked_image2_route_header_name": settings.masked_image2_route_header_name,
+            "masked_image2_route_header_value": settings.masked_image2_route_header_value,
+        }
+        try:
+            object.__setattr__(settings, "masked_image2_base_url", f"http://127.0.0.1:{server.server_port}/v1")
+            object.__setattr__(settings, "masked_image2_api_key", "test-only")
+            object.__setattr__(settings, "masked_image2_api_key_file", None)
+            object.__setattr__(settings, "masked_image2_transport", "json-data-url")
+            object.__setattr__(settings, "masked_image2_auth_scheme", "ApiKey")
+            object.__setattr__(settings, "masked_image2_route_header_name", "X-CatsCo-Image-Provider")
+            object.__setattr__(settings, "masked_image2_route_header_value", "image2")
+            with TemporaryDirectory() as folder:
+                root = Path(folder)
+                source = root / "source.png"
+                Image.new("RGB", (512, 512), "gray").save(source)
+                mask = np.zeros((512, 512), dtype=np.uint8)
+                mask[180:330, 180:330] = 255
+                output, record = run_masked_image2(
+                    source, mask, "一只白猫", root, lambda *_args: None,
+                )
+                self.assertTrue(output.is_file())
+                self.assertEqual(record["transport"], "json-data-url")
+            payload = json.loads(_Handler.body)
+            self.assertEqual(payload["model"], "gpt-image-2")
+            self.assertEqual(len(payload["images"]), 1)
+            self.assertTrue(payload["images"][0]["image_url"].startswith("data:image/png;base64,"))
+            self.assertTrue(payload["mask"].startswith("data:image/png;base64,"))
+            self.assertEqual(_Handler.headers_seen["Authorization"], "ApiKey test-only")
+            self.assertEqual(_Handler.headers_seen["X-CatsCo-Image-Provider"], "image2")
+        finally:
+            server.shutdown()
+            server.server_close()
+            for name, value in old.items():
+                object.__setattr__(settings, name, value)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,8 +12,10 @@ from .config import settings
 
 @lru_cache(maxsize=1)
 def _upstream_mask_processing() -> ModuleType:
-    """Load the upstream implementation without copying or changing it."""
+    """Load upstream helpers, falling back to the bundled crop implementation."""
     source = settings.upstream_dir / "utils" / "mask_processing.py"
+    if not source.is_file():
+        source = settings.root / "third_party" / "inpaint_anything_mask_processing.py"
     spec = importlib.util.spec_from_file_location(
         "catsco_upstream_inpaint_anything_mask_processing", source,
     )

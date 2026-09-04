@@ -87,6 +87,42 @@ def _decode_result(response: requests.Response, task_dir: Path) -> Path:
     return output
 
 
+def _auth_headers() -> dict[str, str]:
+    return {"Authorization": f"{settings.masked_image2_auth_scheme} {_api_key()}"}
+
+
+def _run_json_gateway(
+    endpoint: str,
+    source_payload: bytes,
+    mask_payload: bytes,
+    prompt: str,
+    source_size: tuple[int, int],
+    task_dir: Path,
+) -> requests.Response:
+    payload = {
+        "model": settings.masked_image2_model,
+        "prompt": (
+            "只修改透明蒙版指定的局部区域，保留其余构图、人物、姿态、透视、"
+            "光照和视觉关系。让修改内容在边界处与原图自然衔接。"
+            f"目标内容：{prompt.strip()}"
+        ),
+        "images": [{
+            "image_url": "data:image/png;base64,"
+            + base64.b64encode(source_payload).decode("ascii"),
+        }],
+        "mask": "data:image/png;base64,"
+        + base64.b64encode(mask_payload).decode("ascii"),
+        "n": 1,
+        "size": f"{source_size[0]}x{source_size[1]}",
+        "quality": "high",
+        "output_format": "png",
+    }
+    headers = {**_auth_headers(), "Content-Type": "application/json"}
+    if settings.masked_image2_route_header_name and settings.masked_image2_route_header_value:
+        headers[settings.masked_image2_route_header_name] = settings.masked_image2_route_header_value
+    return requests.post(endpoint, headers=headers, json=payload, timeout=settings.masked_image2_timeout)
+
+
 def run_masked_image2(
     source: Path,
     mask: np.ndarray,
@@ -122,26 +158,33 @@ def run_masked_image2(
     mask_path.write_bytes(mask_payload)
 
     progress("正在提交 Image2 原生透明蒙版编辑", 46)
-    response = requests.post(
-        _endpoint(),
-        headers={"Authorization": f"Bearer {key}"},
-        data={
-            "model": settings.masked_image2_model,
-            "prompt": (
-                "只修改透明蒙版指定的局部区域，保留其余构图、人物、姿态、透视、"
-                "光照和像素级视觉关系。让修改内容在边界处与原图自然衔接。"
-                f"目标内容：{prompt.strip()}"
-            ),
-            "size": f"{source_png.width}x{source_png.height}",
-            "quality": "high",
-            "output_format": "png",
-        },
-        files={
-            settings.masked_image2_image_field: ("source.png", source_payload, "image/png"),
-            "mask": ("mask.png", mask_payload, "image/png"),
-        },
-        timeout=settings.masked_image2_timeout,
-    )
+    endpoint = _endpoint()
+    if settings.masked_image2_transport in {"json", "json-data-url", "catsco-json"}:
+        response = _run_json_gateway(
+            endpoint, source_payload, mask_payload, prompt,
+            (source_png.width, source_png.height), task_dir,
+        )
+    else:
+        response = requests.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {key}"},
+            data={
+                "model": settings.masked_image2_model,
+                "prompt": (
+                    "只修改透明蒙版指定的局部区域，保留其余构图、人物、姿态、透视、"
+                    "光照和像素级视觉关系。让修改内容在边界处与原图自然衔接。"
+                    f"目标内容：{prompt.strip()}"
+                ),
+                "size": f"{source_png.width}x{source_png.height}",
+                "quality": "high",
+                "output_format": "png",
+            },
+            files={
+                settings.masked_image2_image_field: ("source.png", source_payload, "image/png"),
+                "mask": ("mask.png", mask_payload, "image/png"),
+            },
+            timeout=settings.masked_image2_timeout,
+        )
     request_id = response.headers.get("x-request-id")
     output = _decode_result(response, task_dir)
     progress("Image2 原生蒙版结果已返回", 82)
@@ -151,6 +194,13 @@ def run_masked_image2(
         "endpoint_path": urlparse(_endpoint()).path,
         "model": settings.masked_image2_model,
         "request_id": request_id,
+        "transport": settings.masked_image2_transport,
+        "route_header": (
+            f"{settings.masked_image2_route_header_name}:"
+            f"{settings.masked_image2_route_header_value}"
+            if settings.masked_image2_route_header_name and settings.masked_image2_route_header_value
+            else None
+        ),
         "mask_semantics": "transparent_pixels_are_editable",
         "mask_file": mask_path.name,
         "ia_window_size": list(original_size),

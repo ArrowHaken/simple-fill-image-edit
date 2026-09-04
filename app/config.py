@@ -32,18 +32,43 @@ class Settings:
     remote_node: str = "/srv/catsco-agent/tools/node-v24.18.0/bin/node"
     remote_skill: str = "/srv/catsco-agent/skills/image-asset-generator"
     masked_image2_base_url: str = os.getenv(
-        "CATSCO_MASKED_IMAGE2_BASE_URL", "https://api.openai.com/v1",
+        "CATSCO_MASKED_IMAGE2_BASE_URL",
+        os.getenv("IMAGE_API_BASE_URL", "https://api.openai.com/v1"),
     ).rstrip("/")
-    masked_image2_api_key: str = os.getenv("CATSCO_MASKED_IMAGE2_API_KEY", "").strip()
+    masked_image2_api_key: str = os.getenv(
+        "CATSCO_MASKED_IMAGE2_API_KEY",
+        os.getenv("IMAGE_API_KEY", ""),
+    ).strip()
     masked_image2_api_key_file: Path | None = (
         Path(os.environ["CATSCO_MASKED_IMAGE2_API_KEY_FILE"])
         if os.getenv("CATSCO_MASKED_IMAGE2_API_KEY_FILE") else None
     )
-    masked_image2_model: str = os.getenv("CATSCO_MASKED_IMAGE2_MODEL", "gpt-image-2")
+    masked_image2_model: str = os.getenv(
+        "CATSCO_MASKED_IMAGE2_MODEL",
+        os.getenv("IMAGE_MODEL", "gpt-image-2"),
+    )
     masked_image2_timeout: int = int(os.getenv("CATSCO_MASKED_IMAGE2_TIMEOUT", "600"))
     masked_image2_image_field: str = os.getenv(
-        "CATSCO_MASKED_IMAGE2_IMAGE_FIELD", "image[]",
+        "CATSCO_MASKED_IMAGE2_IMAGE_FIELD",
+        os.getenv("IMAGE_FIELD", "image[]"),
     )
+    masked_image2_transport: str = os.getenv(
+        "CATSCO_MASKED_IMAGE2_TRANSPORT",
+        os.getenv("IMAGE_API_TRANSPORT", "multipart"),
+    ).strip().lower()
+    masked_image2_route_header_name: str = os.getenv(
+        "CATSCO_MASKED_IMAGE2_ROUTE_HEADER_NAME",
+        os.getenv("IMAGE_ROUTE_HEADER_NAME", ""),
+    ).strip()
+    masked_image2_route_header_value: str = os.getenv(
+        "CATSCO_MASKED_IMAGE2_ROUTE_HEADER_VALUE",
+        os.getenv("IMAGE_ROUTE_HEADER_VALUE", ""),
+    ).strip()
+    masked_image2_auth_scheme: str = os.getenv(
+        "CATSCO_MASKED_IMAGE2_AUTH_SCHEME",
+        "ApiKey" if masked_image2_transport in {"json", "json-data-url", "catsco-json"}
+        else "Bearer",
+    ).strip() or "Bearer"
     host: str = os.getenv("CATSCO_INPAINT_HOST", "127.0.0.1")
     port: int = int(os.getenv("CATSCO_INPAINT_PORT", "7862"))
 

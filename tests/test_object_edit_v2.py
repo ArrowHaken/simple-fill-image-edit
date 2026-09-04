@@ -90,8 +90,12 @@ class ObjectEditV2Tests(unittest.TestCase):
 
     def test_integrated_v2_task_persists_every_review_artifact(self):
         old_data_dir = settings.data_dir
+        old_ssh_key = settings.ssh_key
         with TemporaryDirectory() as folder:
             object.__setattr__(settings, "data_dir", Path(folder))
+            fake_ssh_key = Path(folder) / "test-image2-route.key"
+            fake_ssh_key.write_text("test", encoding="utf-8")
+            object.__setattr__(settings, "ssh_key", fake_ssh_key)
             try:
                 project = storage.create_project("v2 test", "source.png", 512, 512)
                 source = np.full((512, 512, 3), 180, dtype=np.uint8)
@@ -153,6 +157,7 @@ class ObjectEditV2Tests(unittest.TestCase):
                     )
             finally:
                 object.__setattr__(settings, "data_dir", old_data_dir)
+                object.__setattr__(settings, "ssh_key", old_ssh_key)
 
 
 if __name__ == "__main__":
