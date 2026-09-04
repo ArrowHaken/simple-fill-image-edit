@@ -18,10 +18,11 @@ try {
     Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
   }
   $manifest = Get-Content (Join-Path $repo 'artifact/manifest.json') -Raw | ConvertFrom-Json
-  $manifest.build = [ordered]@{
+  $build = [ordered]@{
     commit = (git -C $repo rev-parse HEAD).Trim()
     builtAt = (Get-Date).ToUniversalTime().ToString('o')
   }
+  $manifest | Add-Member -NotePropertyName build -NotePropertyValue $build
   $manifest | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $stage 'artifact/manifest.json') -Encoding utf8
   New-Item -ItemType Directory -Force -Path (Split-Path $out) | Out-Null
   if (Test-Path $out) { Remove-Item -LiteralPath $out -Force }
