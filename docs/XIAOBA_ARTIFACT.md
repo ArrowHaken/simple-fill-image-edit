@@ -18,13 +18,15 @@ Artifact 入口是 `artifact/manifest.json`，实际页面由现有 FastAPI 工�
 - 已验证上传、SAM3 目标分割、CatsCo JSON 原生蒙版 Image2、结果回填。
 - 已验证编辑范围外像素不被提交结果污染。
 - 已部署到天选打工仔的独立 systemd 服务（仅监听 `127.0.0.1:20001`）。
-- 已注册到天选打工仔的 `cloud-html-artifact` 索引，正式 Artifact 为 v1；静态页面通过同域 API 路由调用该服务。
+- 已注册到天选打工仔的 `cloud-html-artifact` 索引，正式 Artifact 当前为 v3；静态页面通过同域 API 路由调用该服务。
+- 已按交接包白猫基线补强短句替换 Prompt，并缓存不可变媒体、减少重复缩略图请求和任务轮询负载。
 - Artifact 包不包含 API key、SSH 密钥、真实图片和历史任务数据。
 
 ## 当前交付入口
 
 - URL：`https://agent-407.artifacts.catsco.fun:19991/artifacts/catsco-image-edit-workbench/latest/`
 - 该入口已出现在共享 Artifact 索引中，不需要额外账密。
+- v3 会把“改成一只猫”这类短句结合已选目标自动扩展为“完整替换、清除旧对象、保持构图/人物/手部关系”的生成约束；用户原始输入仍保存在任务记录中。
 - 另保留 `/catsco-image-edit/` Basic Auth 调试入口，供排查新版本服务；未改动原有 Artifact、visual workspace 或 CatsCo agent 路由。
 
 ## 下一步接入
