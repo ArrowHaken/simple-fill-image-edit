@@ -43,6 +43,7 @@ def run_catsco_masked_image2(
     image.save(source_path, format="PNG")
     build_alpha_mask(mask).save(mask_path, format="PNG")
     prompt_path.write_text(
+        "完全替换透明蒙版内的原始对象，蒙版内不得保留原始对象的任何可见部分；"
         "只修改透明蒙版指定的局部区域，保留其余构图、人物、姿态、透视、光照和视觉关系。"
         "让修改内容在边界处与原图自然衔接。目标内容：" + prompt.strip(),
         encoding="utf-8",

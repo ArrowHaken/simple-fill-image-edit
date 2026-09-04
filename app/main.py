@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
 import json
+import re
 import threading
 
 import cv2
@@ -99,6 +100,37 @@ def _mask_record(project: dict, mask_id: str) -> dict:
     if record is None:
         raise FileNotFoundError(f"不存在的蒙版：{mask_id}")
     return record
+
+
+def _generation_prompt(task: dict, mask_meta: dict) -> str:
+    """Turn the common short UI command into the handoff's proven prompt.
+
+    The handoff examples use an explicit replacement contract.  Keeping the
+    user's original text in task.json is useful for auditability, while the
+    provider receives enough spatial/semantic instruction to remove the old
+    object instead of merely drawing the new one beside it.
+    """
+    prompt = str(task.get("prompt", "")).strip()
+    if task.get("operation") != "fill" or task.get("pipeline_mode") != "simple_fill":
+        return prompt
+    if len(prompt) > 24:
+        return prompt
+    target = str(mask_meta.get("prompt", "")).strip() or "选区内原对象"
+    replacement = prompt
+    match = re.search(r"(?:把|将)?(?:原图中的)?(.+?)(?:改成|换成|变成|替换成|替换为)(.+)$", prompt)
+    if match:
+        target = match.group(1).strip() or target
+        replacement = match.group(2).strip()
+    else:
+        replacement = re.sub(r"^(?:改成|换成|变成|替换成|替换为)", "", prompt).strip()
+    if not replacement:
+        return prompt
+    return (
+        f"将{target}完整替换为{replacement}。"
+        f"{replacement}必须完整出现在选区内，保留清晰完整的主体结构和与周围对象自然的姿态关系。"
+        f"蒙版内不得保留{target}的任何可见部分。"
+        "保持人物身份、姿态、手部、服装、背景、构图、透视、光照和原图风格不变。"
+    )
 
 
 @app.get("/")
@@ -351,11 +383,13 @@ def _run_task(project_id: str, task_id: str) -> None:
             def progress(stage: str, value: int):
                 _set_task(project_id, task_id, stage, value)
 
+            provider_prompt = _generation_prompt(task, mask_meta)
+
             if settings.masked_image2_key_ready:
                 provider_path, provider_record = run_masked_image2(
                     crop_source_path,
                     crop_mask,
-                    task["prompt"],
+                    provider_prompt,
                     task_dir,
                     progress,
                 )
@@ -364,7 +398,7 @@ def _run_task(project_id: str, task_id: str) -> None:
                     task_id,
                     crop_source_path,
                     crop_mask,
-                    task["prompt"],
+                    provider_prompt,
                     task_dir,
                     progress,
                 )
@@ -375,7 +409,7 @@ def _run_task(project_id: str, task_id: str) -> None:
                 provider_path, provider_record = run_image2(
                     task_id, crop_source_path, guide_path,
                     crop_image.shape[1], crop_image.shape[0],
-                    task["operation"], task["prompt"], task_dir, progress,
+                    task["operation"], provider_prompt, task_dir, progress,
                     inpaint_anything_crop=True,
                 )
             provider_artifact_name = provider_path.name
@@ -570,6 +604,8 @@ def _run_task(project_id: str, task_id: str) -> None:
                     "protected_foreground_interior",
                 ],
             }
+            provider_record["prompt_original"] = task["prompt"]
+            provider_record["prompt_used"] = provider_prompt
         else:
             guide = image2_mask_guide(effective_mask)
             guide_path = task_dir / "mask-guide.png"

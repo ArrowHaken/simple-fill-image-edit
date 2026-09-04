@@ -41,10 +41,11 @@ function prefixedUrl(url) {
   if (!url || !API_PREFIX || !url.startsWith("/") || url.startsWith(API_PREFIX)) return url;
   return `${API_PREFIX}${url}`;
 }
-function cache(url) {
-  const target = prefixedUrl(url);
-  return `${target}${target.includes("?") ? "&" : "?"}t=${Date.now()}`;
-}
+// All media paths are immutable (project sources, masks and version IDs are
+// generated once).  Avoiding a timestamp query lets the browser reuse the
+// same thumbnails and prevents a project refresh from downloading every
+// image again.
+function mediaUrl(url) { return prefixedUrl(url); }
 
 async function checkHealth() {
   try {
@@ -70,7 +71,7 @@ async function loadProjects() {
   const shown = projects.filter(item => item.name.toLowerCase().includes(query));
   $("#projectList").innerHTML = shown.length ? shown.map(item => `
     <article class="project-card ${state.project?.id === item.id ? "active" : ""}" data-project="${item.id}">
-      <img src="${cache(item.thumbnail_url)}" alt=""><div><strong>${escapeHtml(item.name)}</strong>
+      <img src="${mediaUrl(item.thumbnail_url)}" alt=""><div><strong>${escapeHtml(item.name)}</strong>
       <small>${item.width}×${item.height} · ${item.versions} 个结果</small></div>
     </article>`).join("") : `<p class="quiet">还没有保存的项目。</p>`;
   $$("[data-project]").forEach(card => card.onclick = () => openProject(card.dataset.project));
@@ -92,15 +93,14 @@ async function openProject(projectId) {
   $("#actionControls").classList.toggle("disabled", !state.targetMask);
   await showImage(state.project.source_url, "原始素材");
   renderProject();
-  loadProjects();
 }
 
 function renderProject() {
   const p = state.project;
   if (!p) return;
   $("#versionCount").textContent = `${p.versions.length} 个结果`;
-  const cards = [`<article class="version-card source-card ${state.sourceRef === "source" ? "active" : ""}" data-source-ref="source"><img src="${cache(p.source_url)}"><span>原始素材</span></article>`];
-  p.versions.forEach(version => cards.push(`<article class="version-card ${state.sourceRef === version.id ? "active" : ""}" data-source-ref="${version.id}" data-url="${version.url}"><img src="${cache(version.url)}"><span>${operationName(version.operation)} · ${shortId(version.id)}</span></article>`));
+  const cards = [`<article class="version-card source-card ${state.sourceRef === "source" ? "active" : ""}" data-source-ref="source"><img src="${mediaUrl(p.source_url)}"><span>原始素材</span></article>`];
+  p.versions.forEach(version => cards.push(`<article class="version-card ${state.sourceRef === version.id ? "active" : ""}" data-source-ref="${version.id}" data-url="${version.url}"><img src="${mediaUrl(version.url)}"><span>${operationName(version.operation)} · ${shortId(version.id)}</span></article>`));
   $("#versionList").innerHTML = cards.join("");
   $$("[data-source-ref]").forEach(card => card.onclick = () => selectSource(card.dataset.sourceRef, card.dataset.url));
 
@@ -183,7 +183,6 @@ async function showImage(url, label, resetMask = false) {
     drawPoints();
     canvas.classList.remove("hidden");
     $("#emptyState").classList.add("hidden");
-    $("#stageNote").classList.remove("hidden");
     $("#sourceLabel").textContent = `${label} · ${image.naturalWidth}×${image.naturalHeight}`;
     $("#showSource").disabled = false;
     $("#fitCanvas").disabled = false;
@@ -192,7 +191,7 @@ async function showImage(url, label, resetMask = false) {
     $("#downloadCurrent").setAttribute("download", "");
   };
   image.onerror = () => toast("图片加载失败", true);
-  image.src = cache(url);
+  image.src = mediaUrl(url);
   if (resetMask) state.activeMask = null;
 }
 
@@ -248,6 +247,7 @@ $("#fileInput").onchange = async event => {
     const project = await api("/api/projects", {method: "POST", body: data});
     toast("项目已创建，原图已持久化保存");
     await openProject(project.id);
+    await loadProjects();
   } catch (error) { toast(error.message, true); }
   finally { $("#uploadButton").disabled = false; $("#uploadButton b").textContent = "上传原图"; event.target.value = ""; }
 };
@@ -375,7 +375,7 @@ async function startPolling(taskId) {
       }
     } catch (error) { clearInterval(state.polling); toast(error.message, true); }
   };
-  await poll(); state.polling = setInterval(poll, 1800);
+  await poll(); state.polling = setInterval(poll, 2500);
 }
 
 async function retryTask(taskId) {

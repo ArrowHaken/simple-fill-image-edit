@@ -102,6 +102,7 @@ def _run_json_gateway(
     payload = {
         "model": settings.masked_image2_model,
         "prompt": (
+            "完全替换透明蒙版内的原始对象，蒙版内不得保留原始对象的任何可见部分；"
             "只修改透明蒙版指定的局部区域，保留其余构图、人物、姿态、透视、"
             "光照和视觉关系。让修改内容在边界处与原图自然衔接。"
             f"目标内容：{prompt.strip()}"
@@ -171,6 +172,7 @@ def run_masked_image2(
             data={
                 "model": settings.masked_image2_model,
                 "prompt": (
+                    "完全替换透明蒙版内的原始对象，蒙版内不得保留原始对象的任何可见部分；"
                     "只修改透明蒙版指定的局部区域，保留其余构图、人物、姿态、透视、"
                     "光照和像素级视觉关系。让修改内容在边界处与原图自然衔接。"
                     f"目标内容：{prompt.strip()}"

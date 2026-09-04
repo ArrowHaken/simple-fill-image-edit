@@ -30,6 +30,13 @@ _PROMPT_ALIASES = {
     "白猫": "white cat", "长毛猫": "long-haired cat",
 }
 
+# A project may ask SAM3 for the same source more than once (for example, a
+# target followed by a protected foreground object).  WaveSpeed accepts the
+# uploaded media URL, so reuse a recent ticket instead of uploading identical
+# bytes again.  The short TTL avoids depending on an indefinitely valid URL.
+_UPLOAD_CACHE: dict[tuple[str, int, int], tuple[str, float]] = {}
+_UPLOAD_CACHE_TTL = 300.0
+
 
 def _provider_prompt(value: str) -> str:
     clean = value.strip()
@@ -53,6 +60,12 @@ def _headers() -> dict[str, str]:
 
 
 def upload_image(path: Path) -> str:
+    stat = path.stat()
+    cache_key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    now = time.monotonic()
+    cached = _UPLOAD_CACHE.get(cache_key)
+    if cached and now - cached[1] < _UPLOAD_CACHE_TTL:
+        return cached[0]
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     response = requests.post(
         f"{settings.wavespeed_base}/media/uploads",
@@ -75,7 +88,13 @@ def upload_image(path: Path) -> str:
             timeout=(10, 300),
         )
     pushed.raise_for_status()
-    return ticket["download_url"]
+    download_url = ticket["download_url"]
+    _UPLOAD_CACHE[cache_key] = (download_url, now)
+    # Bound memory if a long-lived worker sees many one-off uploads.
+    for key, (_, created) in list(_UPLOAD_CACHE.items()):
+        if now - created >= _UPLOAD_CACHE_TTL:
+            _UPLOAD_CACHE.pop(key, None)
+    return download_url
 
 
 def _unwrap(body: dict[str, Any]) -> dict[str, Any]:
@@ -197,7 +216,9 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
 
     with Image.open(image_path) as image:
         width, height = image.size
+    started = time.monotonic()
     download_url = upload_image(image_path)
+    uploaded_at = time.monotonic()
     payload: dict[str, Any] = {
         "image": download_url,
         "point_prompts": points,
@@ -213,6 +234,7 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
     if prompt.strip() and not points and not boxes:
         prompt_sent = _provider_prompt(prompt)[:32]
         payload["prompt"] = prompt_sent
+    submitted_at = time.monotonic()
     response = requests.post(
         f"{settings.wavespeed_base}/wavespeed-ai/sam3-image-rle",
         headers={**_headers(), "Content-Type": "application/json"},
@@ -231,7 +253,9 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
     result_url = task.get("urls", {}).get("get") or (
         f"{settings.wavespeed_base}/predictions/{prediction_id}/result"
     )
-    deadline = time.monotonic() + timeout_seconds
+    submitted_done_at = time.monotonic()
+    deadline = submitted_done_at + timeout_seconds
+    poll_count = 0
     while True:
         status = task.get("status")
         if status == "completed":
@@ -240,7 +264,11 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
             raise WaveSpeedError(task.get("error") or f"SAM3 任务状态：{status}")
         if time.monotonic() >= deadline:
             raise WaveSpeedError(f"SAM3 轮询超时；prediction_id={prediction_id}")
-        time.sleep(1.5)
+        # Poll more responsively than the old 1.5 s cadence; the provider's
+        # queue dominates total latency, while this removes up to 0.7 s after
+        # inference completes.
+        time.sleep(0.8)
+        poll_count += 1
         polled = requests.get(result_url, headers=_headers(), timeout=(10, 60))
         polled.raise_for_status()
         task = _unwrap(polled.json())
@@ -262,7 +290,13 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
         "model": "wavespeed-ai/sam3-image-rle",
         "prediction_id": prediction_id,
         "status": task.get("status"),
-        "timings": task.get("timings", {}),
+        "timings": {
+            **task.get("timings", {}),
+            "upload_ms": round((uploaded_at - started) * 1000),
+            "submit_ms": round((submitted_done_at - uploaded_at) * 1000),
+            "wait_ms": round((time.monotonic() - submitted_done_at) * 1000),
+            "poll_count": poll_count,
+        },
         "mask_candidates": len(masks),
         "input_mode": "spatial" if points or boxes else "text",
         "prompt_sent": prompt_sent or None,
