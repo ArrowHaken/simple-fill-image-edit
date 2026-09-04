@@ -22,6 +22,8 @@ const state = {
   pointLabel: 1,
   operation: "fill",
   canvasImage: null,
+  zoom: 1,
+  fitZoom: 1,
   polling: null,
   health: null,
 };
@@ -193,14 +195,18 @@ async function showImage(url, label, resetMask = false) {
     canvas.height = image.naturalHeight;
     canvas.getContext("2d").drawImage(image, 0, 0);
     drawPoints();
-    canvas.classList.remove("hidden");
+    $("#canvasShell").classList.remove("hidden");
     $("#emptyState").classList.add("hidden");
     $("#sourceLabel").textContent = `${label} · ${image.naturalWidth}×${image.naturalHeight}`;
     $("#showSource").disabled = false;
     $("#fitCanvas").disabled = false;
+    $("#zoomOut").disabled = false;
+    $("#zoomValue").disabled = false;
+    $("#zoomIn").disabled = false;
     $("#downloadCurrent").classList.remove("disabled");
     $("#downloadCurrent").href = prefixedUrl(url);
     $("#downloadCurrent").setAttribute("download", "");
+    requestAnimationFrame(() => fitCanvasToStage());
   };
   image.onerror = () => toast("图片加载失败", true);
   image.src = mediaUrl(url);
@@ -231,6 +237,54 @@ function drawPoints() {
     ctx.strokeRect(x_min, y_min, x_max - x_min, y_max - y_min);
     ctx.restore();
   }
+}
+
+const ZOOM_STEPS = [0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
+
+function applyZoom(nextZoom, preserveCenter = true) {
+  if (!state.canvasImage) return;
+  const stage = $("#stage");
+  const canvas = $("#stageCanvas");
+  const oldWidth = Math.max(stage.scrollWidth, 1);
+  const oldHeight = Math.max(stage.scrollHeight, 1);
+  const centerX = (stage.scrollLeft + stage.clientWidth / 2) / oldWidth;
+  const centerY = (stage.scrollTop + stage.clientHeight / 2) / oldHeight;
+  state.zoom = Math.max(0.1, Math.min(8, nextZoom));
+  canvas.style.width = `${Math.round(state.canvasImage.naturalWidth * state.zoom)}px`;
+  canvas.style.height = `${Math.round(state.canvasImage.naturalHeight * state.zoom)}px`;
+  $("#zoomValue").textContent = `${Math.round(state.zoom * 100)}%`;
+  $("#zoomOut").disabled = state.zoom <= 0.1;
+  $("#zoomIn").disabled = state.zoom >= 8;
+  requestAnimationFrame(() => {
+    if (preserveCenter) {
+      stage.scrollLeft = centerX * stage.scrollWidth - stage.clientWidth / 2;
+      stage.scrollTop = centerY * stage.scrollHeight - stage.clientHeight / 2;
+    } else {
+      stage.scrollLeft = Math.max(0, (stage.scrollWidth - stage.clientWidth) / 2);
+      stage.scrollTop = Math.max(0, (stage.scrollHeight - stage.clientHeight) / 2);
+    }
+  });
+}
+
+function fitCanvasToStage() {
+  if (!state.canvasImage) return;
+  const stage = $("#stage");
+  const availableWidth = Math.max(1, stage.clientWidth - 28);
+  const availableHeight = Math.max(1, stage.clientHeight - 28);
+  state.fitZoom = Math.min(
+    1,
+    availableWidth / state.canvasImage.naturalWidth,
+    availableHeight / state.canvasImage.naturalHeight,
+  );
+  applyZoom(state.fitZoom, false);
+}
+
+function stepZoom(direction) {
+  const epsilon = 0.0001;
+  const next = direction > 0
+    ? ZOOM_STEPS.find(value => value > state.zoom + epsilon) ?? 8
+    : [...ZOOM_STEPS].reverse().find(value => value < state.zoom - epsilon) ?? 0.1;
+  applyZoom(next);
 }
 
 function canvasPoint(event) {
@@ -484,7 +538,20 @@ async function resumeTask(taskId) {
 }
 
 $("#showSource").onclick = returnToSelectedSource;
-$("#fitCanvas").onclick = () => $("#stageCanvas").scrollIntoView({block: "center", inline: "center"});
+$("#zoomOut").onclick = () => stepZoom(-1);
+$("#zoomIn").onclick = () => stepZoom(1);
+$("#zoomValue").onclick = fitCanvasToStage;
+$("#fitCanvas").onclick = fitCanvasToStage;
+window.addEventListener("keydown", event => {
+  if (!state.canvasImage || !(event.ctrlKey || event.metaKey)) return;
+  if (["+", "="].includes(event.key)) {
+    event.preventDefault(); stepZoom(1);
+  } else if (event.key === "-") {
+    event.preventDefault(); stepZoom(-1);
+  } else if (event.key === "0") {
+    event.preventDefault(); fitCanvasToStage();
+  }
+});
 $("#refreshProjects").onclick = loadProjects;
 $("#projectSearch").oninput = loadProjects;
 

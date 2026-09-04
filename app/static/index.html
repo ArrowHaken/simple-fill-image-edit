@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CatsCo 语义局部重绘 · Fill Anything</title>
-  <link rel="stylesheet" href="static/styles.css?v=7">
+  <link rel="stylesheet" href="static/styles.css?v=9">
   <link rel="stylesheet" href="assets/catsco-standard-footer.css">
 </head>
 <body>
@@ -81,6 +81,11 @@
         <div class="source-label"><i></i><span id="sourceLabel">等待图片</span></div>
         <div class="stage-actions">
           <button id="showSource" disabled>查看源图</button>
+          <div class="zoom-controls" aria-label="画布缩放">
+            <button id="zoomOut" disabled title="缩小">−</button>
+            <button id="zoomValue" disabled title="恢复适合窗口">适合</button>
+            <button id="zoomIn" disabled title="放大">＋</button>
+          </div>
           <button id="fitCanvas" disabled>适合窗口</button>
           <a id="downloadCurrent" class="button-link disabled">下载当前图</a>
         </div>
@@ -91,7 +96,9 @@
           <h1>说出图中的对象，<br>只修改你想改的部分。</h1>
           <p>写出原图对象，再告诉 Image2 想把它变成什么。</p>
         </div>
-        <canvas id="stageCanvas" class="hidden"></canvas>
+        <div class="canvas-shell hidden" id="canvasShell">
+          <canvas id="stageCanvas"></canvas>
+        </div>
       </div>
       <div class="task-progress hidden" id="taskProgress">
         <div class="progress-copy"><span id="taskStage">准备任务</span><strong id="taskPercent">0%</strong></div>
@@ -129,6 +136,6 @@
       </div>
     </div>
   </footer>
-  <script src="static/app.js?v=7"></script>
+  <script src="static/app.js?v=9"></script>
 </body>
 </html>
