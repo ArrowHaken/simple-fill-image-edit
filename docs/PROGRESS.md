@@ -10,6 +10,7 @@ kept outside the repository.
 | 2026-09-04 | SAM3 baseline | The supplied 768×1024 poster was uploaded and `glasses` produced a completed WaveSpeed SAM3 mask (coverage `0.00629`, inference `2407 ms`). |
 | 2026-09-04 | Optional runtime | `/api/health` now remains useful without PyTorch/Big-LaMa; `simple_fill` reports available while the optional LaMa lane reports unavailable. |
 | 2026-09-04 | Image2 relay discovery | `relay.catsco.cc/v1/images/edits` is reachable, but the current Bifrost model catalog has no `gpt-image-2` provider mapping. No paid Image2 request was submitted. |
+| 2026-09-04 | End-to-end baseline | The supplied poster completed SAM3 `glasses` → CatsCo JSON Image2 (`pptoken`) → native-mask crop restore → final version registration. Pixels outside the effective edit mask were unchanged. |
 | 2026-09-04 | Production safety | The server was inspected read-only; no production service or configuration was changed. |
 
 ## Next validation gate
