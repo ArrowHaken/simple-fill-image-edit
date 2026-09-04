@@ -1,0 +1,246 @@
+[data-catsco-publication-branding="v2"] {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 48px 0 0 !important;
+  padding: 42px max(22px, calc((100% - 1120px) / 2)) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #090a0c !important;
+  color: #ffffff !important;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  font-style: normal !important;
+  line-height: 1.4 !important;
+  text-align: left !important;
+  overflow: clip !important;
+}
+
+[data-catsco-publication-branding="v2"],
+[data-catsco-publication-branding="v2"] * {
+  box-sizing: border-box !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-branding-inner] {
+  display: grid !important;
+  grid-template-columns: max-content max-content !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 24px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 1120px !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-brand-block] {
+  display: grid !important;
+  grid-template-columns: 64px max-content !important;
+  align-items: center !important;
+  gap: 16px !important;
+  width: max-content !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-brand-mark] {
+  display: block !important;
+  width: 64px !important;
+  height: auto !important;
+  max-width: 100% !important;
+  aspect-ratio: 180 / 83 !important;
+  object-fit: contain !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-brand-copy] {
+  display: grid !important;
+  grid-template-columns: max-content !important;
+  gap: 2px !important;
+  width: max-content !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-brand-name] {
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  color: #ffffff !important;
+  font-size: 26px !important;
+  font-weight: 750 !important;
+  line-height: 1.12 !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-brand-description] {
+  display: block !important;
+  width: max-content !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  color: #aeb4ba !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  line-height: 1.45 !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: keep-all !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-cta-block] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  justify-self: end !important;
+  gap: 16px !important;
+  width: max-content !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-cta-prompt] {
+  display: block !important;
+  width: max-content !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  color: #b9b9bd !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  line-height: 1.45 !important;
+  letter-spacing: 0 !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: keep-all !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-brand-cta] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  align-self: center !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  min-height: 44px !important;
+  margin: 0 !important;
+  padding: 13px 18px !important;
+  border: 1px solid #61d8bb !important;
+  border-radius: 8px !important;
+  background: #54c9ac !important;
+  box-shadow: 0 3px 0 #2d8f78 !important;
+  color: #07110e !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
+  text-align: center !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: keep-all !important;
+  flex: none !important;
+  cursor: pointer !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-brand-cta]:hover {
+  background: #65d5ba !important;
+}
+
+[data-catsco-publication-branding="v2"] [data-catsco-publication-brand-cta]:focus-visible {
+  outline: 3px solid rgba(84, 201, 172, 0.4) !important;
+  outline-offset: 3px !important;
+}
+
+@media (max-width: 640px) {
+  [data-catsco-publication-branding="v2"] {
+    padding: 30px 16px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-branding-inner] {
+    gap: 12px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-brand-block] {
+    grid-template-columns: 44px max-content !important;
+    gap: 10px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-brand-mark] {
+    width: 44px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-brand-name] {
+    font-size: 22px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-brand-description],
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-cta-prompt] {
+    font-size: 12px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-cta-block] {
+    gap: 12px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-brand-cta] {
+    min-height: 40px !important;
+    padding: 12px 14px !important;
+    font-size: 12px !important;
+  }
+}
+
+@media (max-width: 520px) {
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-branding-inner] {
+    grid-template-columns: max-content !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    row-gap: 18px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-cta-block] {
+    justify-self: end !important;
+  }
+}
+
+@media (max-width: 390px) {
+  [data-catsco-publication-branding="v2"] {
+    padding: 26px 12px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-branding-inner] {
+    row-gap: 16px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-brand-block] {
+    grid-template-columns: 34px max-content !important;
+    gap: 6px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-brand-mark] {
+    width: 34px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-brand-name] {
+    font-size: 20px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-cta-block] {
+    gap: 10px !important;
+  }
+
+  [data-catsco-publication-branding="v2"] [data-catsco-publication-brand-cta] {
+    min-height: 38px !important;
+    padding: 10px 8px !important;
+    font-size: 11px !important;
+  }
+}

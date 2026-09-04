@@ -408,5 +408,9 @@ function friendlyError(value = "") {
 }
 function escapeHtml(value = "") { const node = document.createElement("div"); node.textContent = value; return node.innerHTML; }
 
-checkHealth();
-loadProjects().catch(error => toast(error.message, true));
+const isStaticArtifact = location.pathname.startsWith("/artifacts/");
+const isPublisherLocalQa = isStaticArtifact && location.hostname === "127.0.0.1";
+if (!isPublisherLocalQa) {
+  checkHealth();
+  loadProjects().catch(error => toast(error.message, true));
+}
