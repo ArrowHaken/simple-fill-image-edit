@@ -17,6 +17,10 @@ try {
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
     Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
   }
+  Get-ChildItem -LiteralPath $stage -Directory -Filter '__pycache__' -Recurse -Force |
+    Remove-Item -Recurse -Force
+  Get-ChildItem -LiteralPath $stage -Directory -Filter '.pytest_cache' -Recurse -Force |
+    Remove-Item -Recurse -Force
   $manifest = Get-Content (Join-Path $repo 'artifact/manifest.json') -Raw | ConvertFrom-Json
   $build = [ordered]@{
     commit = (git -C $repo rev-parse HEAD).Trim()
