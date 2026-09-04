@@ -103,6 +103,10 @@ async function openProject(projectId) {
 function renderProject() {
   const p = state.project;
   if (!p) return;
+  // Do not reserve a whole grid row for an empty version history.  The stage
+  // gets that space back until the first result is actually available.
+  $(".stage-column").classList.toggle("has-versions", p.versions.length > 0);
+  $("#filmstrip").classList.toggle("hidden", p.versions.length === 0);
   $("#versionCount").textContent = `${p.versions.length} 个结果`;
   const cards = [`<article class="version-card source-card ${state.sourceRef === "source" ? "active" : ""}" data-source-ref="source"><img src="${mediaUrl(p.source_url)}"><span>原始素材</span></article>`];
   p.versions.forEach(version => cards.push(`<article class="version-card ${state.sourceRef === version.id ? "active" : ""}" data-source-ref="${version.id}" data-url="${version.url}"><img src="${mediaUrl(version.url)}"><span>${operationName(version.operation)} · ${shortId(version.id)}</span></article>`));
