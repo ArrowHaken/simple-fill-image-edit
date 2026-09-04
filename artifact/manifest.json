@@ -1,0 +1,30 @@
+{
+  "schema": "catsco.artifact.v1",
+  "id": "catsco-image-edit-workbench",
+  "version": "0.1.0",
+  "title": "CatsCo 图片编辑工作台",
+  "kind": "mini_app",
+  "entrypoint": "http://127.0.0.1:7862/",
+  "runtime": {
+    "type": "service",
+    "start": "python run.py",
+    "health": "/api/health",
+    "port": 7862
+  },
+  "capabilities": [
+    "upload-image",
+    "semantic-selection",
+    "point-selection",
+    "masked-image-edit",
+    "versioned-results"
+  ],
+  "providers": {
+    "segmentation": "WaveSpeed SAM3",
+    "generation": "CatsCo Image2 native-mask gateway"
+  },
+  "security": {
+    "secretsInBundle": false,
+    "requiresRuntimeEnv": true,
+    "productionDeploy": false
+  }
+}

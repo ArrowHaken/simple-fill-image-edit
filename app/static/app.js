@@ -209,7 +209,18 @@ function syncSegmentInputMode() {
 
 $("#stageCanvas").addEventListener("click", event => {
   if (!state.project || !state.canvasImage) return;
-  toast("这个实验版固定使用文字语义选择，请在左侧填写对象名称");
+  const canvas = event.currentTarget;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  state.points.push({
+    x: Math.max(0, Math.min(canvas.width - 1, Math.round((event.clientX - rect.left) * scaleX))),
+    y: Math.max(0, Math.min(canvas.height - 1, Math.round((event.clientY - rect.top) * scaleY))),
+    label: event.shiftKey ? 0 : state.pointLabel,
+  });
+  syncSegmentInputMode();
+  drawPoints();
+  toast(event.shiftKey ? "已添加排除点" : "已添加目标点");
 });
 
 $("#uploadButton").onclick = () => $("#fileInput").click();
