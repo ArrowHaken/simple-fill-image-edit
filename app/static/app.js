@@ -114,7 +114,9 @@ function renderProject() {
   $$("[data-resume]").forEach(button => button.onclick = () => resumeTask(button.dataset.resume));
   if (state.activeMask) {
     $("#maskSummary").className = "mask-summary ready";
-    $("#maskSummary").textContent = `蒙版已就绪 · 覆盖画面 ${(state.activeMask.coverage * 100).toFixed(1)}%`;
+    $("#maskSummary").textContent = state.selectionMode === "box"
+      ? `框选锚点已就绪 · 生成时自动外扩 · 当前覆盖 ${(state.activeMask.coverage * 100).toFixed(1)}%`
+      : `蒙版已就绪 · 覆盖画面 ${(state.activeMask.coverage * 100).toFixed(1)}%`;
   } else {
     $("#maskSummary").className = "mask-summary";
     $("#maskSummary").textContent = "尚未生成蒙版";
@@ -365,9 +367,10 @@ $$('[data-selection-mode]').forEach(button => button.onclick = () => {
   state.selectionMode = button.dataset.selectionMode;
   state.points = [];
   state.box = null;
-  // Text/title replacements generally need only a small safety margin;
-  // ordinary object replacements retain the handoff's 35% baseline.
-  if (state.selectionMode === "box" && $("#growthMode")) $("#growthMode").value = "0.08";
+  // A rectangle is an anchor, not a hard final boundary.  Give title/text
+  // selections a safer default envelope so a slightly under-drawn box still
+  // leaves room for the replacement glyphs and cleanup of old edges.
+  if (state.selectionMode === "box" && $("#growthMode")) $("#growthMode").value = "0.20";
   syncSegmentInputMode();
   drawPoints();
 });

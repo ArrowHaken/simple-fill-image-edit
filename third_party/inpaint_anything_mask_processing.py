@@ -27,11 +27,20 @@ def crop_for_filling_pre(image: np.ndarray, mask: np.ndarray, crop_size: int = 5
     if w > crop_size or h > crop_size:
         if height < width:
             padding = width - height
-            image = np.pad(image, ((padding // 2, padding - padding // 2), (0, 0), (0, 0)), "constant")
+            # Keep the channel axis untouched when padding RGB/RGBA images.
+            image = np.pad(
+                image,
+                ((padding // 2, padding - padding // 2), (0, 0), (0, 0)),
+                "constant",
+            )
             mask = np.pad(mask, ((padding // 2, padding - padding // 2), (0, 0)), "constant")
         else:
             padding = height - width
-            image = np.pad(image, ((0, 0), (padding // 2, padding - padding // 2)), "constant")
+            image = np.pad(
+                image,
+                ((0, 0), (padding // 2, padding - padding // 2), (0, 0)),
+                "constant",
+            )
             mask = np.pad(mask, ((0, 0), (padding // 2, padding - padding // 2)), "constant")
         resize_factor = crop_size / max(w, h)
         image = cv2.resize(image, (0, 0), fx=resize_factor, fy=resize_factor)
@@ -76,7 +85,13 @@ def crop_for_filling_post(
             padding_side = "h"
         else:
             padding = height - width
-            image = np.pad(image, ((0, 0), (padding // 2, padding - padding // 2), (0, 0)), "constant")
+            # ``image`` is 3-D while ``mask`` is 2-D; both need explicit
+            # padding specs or NumPy raises a remapped-shape broadcast error.
+            image = np.pad(
+                image,
+                ((0, 0), (padding // 2, padding - padding // 2), (0, 0)),
+                "constant",
+            )
             mask = np.pad(mask, ((0, 0), (padding // 2, padding - padding // 2)), "constant")
             padding_side = "w"
         resize_factor = crop_size / max(w, h)
