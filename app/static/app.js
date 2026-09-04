@@ -1,5 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const API_PREFIX = location.pathname.startsWith("/catsco-image-edit/") ? "/catsco-image-edit" : "";
 
 const state = {
   project: null,
@@ -18,7 +19,7 @@ const state = {
 };
 
 async function api(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(`${API_PREFIX}${url}`, options);
   const body = response.headers.get("content-type")?.includes("json") ? await response.json() : await response.text();
   if (!response.ok) throw new Error(body.detail || body || `HTTP ${response.status}`);
   return body;
@@ -32,7 +33,14 @@ function toast(message, error = false) {
   node._timer = setTimeout(() => node.className = "toast", 2800);
 }
 
-function cache(url) { return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`; }
+function prefixedUrl(url) {
+  if (!url || !API_PREFIX || !url.startsWith("/") || url.startsWith(API_PREFIX)) return url;
+  return `${API_PREFIX}${url}`;
+}
+function cache(url) {
+  const target = prefixedUrl(url);
+  return `${target}${target.includes("?") ? "&" : "?"}t=${Date.now()}`;
+}
 
 async function checkHealth() {
   try {
@@ -116,14 +124,14 @@ function renderProject() {
 }
 
 function taskCard(task) {
-  const mediaBase = `/media/projects/${task.project_id}/tasks/${task.id}`;
+  const mediaBase = prefixedUrl(`/media/projects/${task.project_id}/tasks/${task.id}`);
   const providerLink = task.artifacts?.provider_original ? `<a href="${mediaBase}/${task.artifacts.provider_original}" target="_blank">供应商原图</a>` : "";
   const candidateLink = task.artifacts?.layered_candidate_full ? `<a href="${mediaBase}/${task.artifacts.layered_candidate_full}" target="_blank">分层候选</a>` : "";
   const resultMaskLink = task.artifacts?.result_object_mask_preview ? `<a href="${mediaBase}/${task.artifacts.result_object_mask_preview}" target="_blank">新对象蒙版</a>` : "";
   const cleanPlateLink = task.artifacts?.clean_plate ? `<a href="${mediaBase}/${task.artifacts.clean_plate}" target="_blank">干净底板</a>` : "";
   const alphaLink = task.artifacts?.commit_alpha ? `<a href="${mediaBase}/${task.artifacts.commit_alpha}" target="_blank">软边 Alpha</a>` : "";
   const qualityLink = task.artifacts?.quality_report ? `<a href="${mediaBase}/${task.artifacts.quality_report}" target="_blank">质量报告</a>` : "";
-  const resultLink = task.version_id ? `<a href="/api/projects/${task.project_id}/versions/${task.version_id}/download">下载结果</a>` : "";
+  const resultLink = task.version_id ? `<a href="${prefixedUrl(`/api/projects/${task.project_id}/versions/${task.version_id}/download`)}">下载结果</a>` : "";
   const resume = task.status === "failed" && task.provider === "image2" ? `<button class="primary-mini" data-resume="${task.id}">恢复已有结果</button>` : "";
   const retry = ["failed", "completed"].includes(task.status) ? `<button data-retry="${task.id}">重新执行</button>` : "";
   const detail = task.error ? friendlyError(task.error) : task.stage;
@@ -176,7 +184,7 @@ async function showImage(url, label, resetMask = false) {
     $("#showSource").disabled = false;
     $("#fitCanvas").disabled = false;
     $("#downloadCurrent").classList.remove("disabled");
-    $("#downloadCurrent").href = url;
+    $("#downloadCurrent").href = prefixedUrl(url);
     $("#downloadCurrent").setAttribute("download", "");
   };
   image.onerror = () => toast("图片加载失败", true);
