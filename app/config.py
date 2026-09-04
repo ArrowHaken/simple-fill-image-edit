@@ -18,7 +18,9 @@ class Settings:
         "WAVESPEED_API_KEY_FILE",
         ROOT / "data" / ".secrets" / "wavespeed-api-key.txt",
     ))
-    wavespeed_base: str = "https://api.wavespeed.ai/api/v3"
+    wavespeed_base: str = os.getenv(
+        "WAVESPEED_BASE_URL", "https://api.wavespeed.ai/api/v3",
+    ).rstrip("/")
     ssh_host: str = os.getenv("CATSCO_IMAGE2_HOST", "203.32.85.223")
     ssh_user: str = os.getenv("CATSCO_IMAGE2_USER", "root")
     ssh_key: Path = Path(os.getenv(
@@ -62,6 +64,18 @@ class Settings:
             and self.masked_image2_api_key_file.is_file()
             and self.masked_image2_api_key_file.stat().st_size > 0
         )
+
+    @property
+    def wavespeed_key_ready(self) -> bool:
+        """Report a configured SAM3 key from env or the legacy secret file."""
+        if os.getenv("WAVESPEED_API_KEY", "").strip():
+            return True
+        try:
+            return self.wavespeed_key_file.is_file() and bool(
+                self.wavespeed_key_file.read_text(encoding="utf-8").strip()
+            )
+        except OSError:
+            return False
 
 
 settings = Settings()

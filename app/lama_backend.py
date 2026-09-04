@@ -22,13 +22,38 @@ def _imports():
 
 
 def validate_installation() -> dict:
-    import torch
+    """Return optional LaMa capabilities without blocking simple_fill.
+
+    The semantic Image2 lane does not require PyTorch or the Big-LaMa
+    checkpoint.  Health reporting must therefore remain useful in a lean
+    environment instead of turning an otherwise runnable service into HTTP
+    500 just because the optional cleanup lane is not installed.
+    """
+    try:
+        import torch
+        torch_version = getattr(torch, "__version__", None)
+        cuda_available = bool(torch.cuda.is_available())
+        cuda_device = torch.cuda.get_device_name(0) if cuda_available else None
+    except Exception as exc:
+        return {
+            "torch": locals().get("torch_version"),
+            "torch_error": str(exc),
+            "cuda_available": False,
+            "cuda_device": None,
+            "checkpoint": str(settings.lama_checkpoint),
+            "checkpoint_ready": False,
+            "lama_ready": False,
+        }
     return {
-        "torch": torch.__version__,
-        "cuda_available": torch.cuda.is_available(),
-        "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "torch": torch_version,
+        "cuda_available": cuda_available,
+        "cuda_device": cuda_device,
         "checkpoint": str(settings.lama_checkpoint),
         "checkpoint_ready": (settings.lama_checkpoint / "models" / "best.ckpt").is_file(),
+        "lama_ready": bool(
+            torch.cuda.is_available()
+            and (settings.lama_checkpoint / "models" / "best.ckpt").is_file()
+        ),
     }
 
 

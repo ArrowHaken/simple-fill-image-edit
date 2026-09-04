@@ -63,7 +63,7 @@ $env:INPAINT_ANYTHING_UPSTREAM="<Inpaint Anything 上游绝对路径>"
 
 `simple_fill` 不要求 Big-LaMa；`remove` 和 `object_v2` 需要完整 GPU Big-LaMa 权重。
 
-`requirements.txt` 保留封装前内容，并不单独锁定 CUDA 版 PyTorch；应先按目标显卡/CUDA 安装匹配的 `torch`，再安装其余依赖。缺少 `torch` 时首页仍可能打开，但 `/api/health` 会在 LaMa 安装检查阶段返回 500。
+`requirements.txt` 保留封装前内容，并不单独锁定 CUDA 版 PyTorch；应先按目标显卡/CUDA 安装匹配的 `torch`，再安装其余依赖。缺少 `torch` 时首页和 `simple_fill` 仍可运行；`/api/health` 会返回 200，并以 `lama_ready=false` 标记可选的 LaMa 路线不可用。
 
 ## 启动与检查
 

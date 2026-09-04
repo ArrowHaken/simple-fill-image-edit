@@ -114,7 +114,7 @@ def health():
         "experimental_object_edit_v2": True,
         "simple_semantic_fill": True,
         "pipeline_default": "simple_fill",
-        "wavespeed_key_ready": bool(settings.wavespeed_key_file.is_file()),
+        "wavespeed_key_ready": settings.wavespeed_key_ready,
         "image2_ssh_key_ready": settings.ssh_key.is_file(),
         "image2_native_mask_ready": settings.masked_image2_key_ready or settings.ssh_key.is_file(),
         "image2_native_mask_route": (
