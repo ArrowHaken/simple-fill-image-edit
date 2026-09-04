@@ -409,7 +409,9 @@ function friendlyError(value = "") {
 function escapeHtml(value = "") { const node = document.createElement("div"); node.textContent = value; return node.innerHTML; }
 
 const isStaticArtifact = location.pathname.startsWith("/artifacts/");
-const isPublisherLocalQa = isStaticArtifact && location.hostname === "127.0.0.1";
+const isPublisherLocalQa = location.hostname === "127.0.0.1"
+  && location.port !== "19991"
+  && location.pathname === "/";
 if (!isPublisherLocalQa) {
   checkHealth();
   loadProjects().catch(error => toast(error.message, true));
