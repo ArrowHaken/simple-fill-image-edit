@@ -63,6 +63,7 @@ class SegmentRequest(BaseModel):
     boxes: list[Box] = []
     prompt: str = Field(default="", max_length=32)
     source_ref: str = "source"
+    selection_mode: Literal["point", "box"] = "point"
 
 
 class GenerateRequest(BaseModel):
@@ -253,23 +254,31 @@ def segment(project_id: str, request: SegmentRequest):
         source = _resolve_source(project, request.source_ref)
         points = [item.model_dump() for item in request.points]
         boxes = [item.model_dump() for item in request.boxes]
-        try:
-            mask, provider = sam3_segment(
-                source, points=points, boxes=boxes, prompt=request.prompt,
-            )
-        except Exception as exc:
-            # Decorative/Chinese ad text is not a reliable SAM3 semantic
-            # category.  A user-drawn box is an explicit spatial contract, so
-            # keep the workflow usable when SAM3 returns an empty mask.
-            if not boxes:
-                raise
+        if request.selection_mode == "box" and boxes:
             mask = _box_mask(source, boxes)
             provider = {
                 "provider": "manual-box-fallback",
                 "input_mode": "box",
-                "sam3_error": str(exc)[:500],
                 "mask_semantics": "white_pixels_are_editable",
             }
+        else:
+            try:
+                mask, provider = sam3_segment(
+                    source, points=points, boxes=boxes, prompt=request.prompt,
+                )
+            except Exception as exc:
+                # A user-drawn box is an explicit spatial contract, so keep
+                # the workflow usable if a legacy caller omits selection_mode
+                # and SAM3 still returns an empty mask.
+                if not boxes:
+                    raise
+                mask = _box_mask(source, boxes)
+                provider = {
+                    "provider": "manual-box-fallback",
+                    "input_mode": "box",
+                    "sam3_error": str(exc)[:500],
+                    "mask_semantics": "white_pixels_are_editable",
+                }
         mask_id = storage.new_id("mask")
         folder = storage.project_dir(project_id) / "masks"
         Image.fromarray(mask).save(folder / f"{mask_id}.png")

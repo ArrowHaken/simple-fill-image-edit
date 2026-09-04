@@ -380,7 +380,7 @@ $("#segmentButton").onclick = async () => {
   try {
     const mask = await api(`/api/projects/${state.project.id}/segment`, {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({points: state.points, boxes, prompt, source_ref: state.sourceRef}),
+      body: JSON.stringify({points: state.points, boxes, prompt, source_ref: state.sourceRef, selection_mode: state.selectionMode}),
     });
     state.activeMask = mask;
     state.targetMask = mask;
