@@ -195,7 +195,7 @@ async function showImage(url, label, resetMask = false) {
     canvas.height = image.naturalHeight;
     canvas.getContext("2d").drawImage(image, 0, 0);
     drawPoints();
-    $("#canvasShell").classList.remove("hidden");
+    canvas.classList.remove("hidden");
     $("#emptyState").classList.add("hidden");
     $("#sourceLabel").textContent = `${label} · ${image.naturalWidth}×${image.naturalHeight}`;
     $("#showSource").disabled = false;
