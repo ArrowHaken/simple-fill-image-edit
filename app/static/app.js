@@ -15,6 +15,10 @@ const state = {
   targetMask: null,
   protectedMasks: [],
   points: [],
+  box: null,
+  selectionMode: "point",
+  dragStart: null,
+  dragging: false,
   pointLabel: 1,
   operation: "fill",
   canvasImage: null,
@@ -87,6 +91,7 @@ async function openProject(projectId) {
   state.targetMask = remembered;
   state.protectedMasks = [];
   state.points = [];
+  state.box = null;
   syncSegmentInputMode();
   $("#projectTitle").textContent = state.project.name;
   $("#editControls").classList.remove("disabled");
@@ -150,6 +155,7 @@ async function selectSource(sourceRef, url) {
   state.targetMask = null;
   state.protectedMasks = [];
   state.points = [];
+  state.box = null;
   syncSegmentInputMode();
   $("#actionControls").classList.add("disabled");
   await showImage(url || state.project.source_url, sourceRef === "source" ? "原始素材" : `基于版本 ${shortId(sourceRef)} 继续`);
@@ -208,30 +214,88 @@ function drawPoints() {
     ctx.fillStyle = "white"; ctx.font = `bold ${radius}px sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(String(index + 1), point.x, point.y + 1);
   });
+  if (state.box) {
+    const {x_min, y_min, x_max, y_max} = state.box;
+    ctx.save();
+    ctx.fillStyle = "rgba(8,125,101,.13)";
+    ctx.fillRect(x_min, y_min, x_max - x_min, y_max - y_min);
+    ctx.strokeStyle = "#087d65";
+    ctx.lineWidth = Math.max(3, Math.min(canvas.width, canvas.height) * .004);
+    ctx.setLineDash([10, 7]);
+    ctx.strokeRect(x_min, y_min, x_max - x_min, y_max - y_min);
+    ctx.restore();
+  }
+}
+
+function canvasPoint(event) {
+  const canvas = event.currentTarget;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: Math.max(0, Math.min(canvas.width - 1, Math.round((event.clientX - rect.left) * scaleX))),
+    y: Math.max(0, Math.min(canvas.height - 1, Math.round((event.clientY - rect.top) * scaleY))),
+  };
+}
+
+function normalizedBox(a, b) {
+  return {
+    x_min: Math.min(a.x, b.x), y_min: Math.min(a.y, b.y),
+    x_max: Math.max(a.x, b.x), y_max: Math.max(a.y, b.y),
+  };
 }
 
 function syncSegmentInputMode() {
   const input = $("#segmentPrompt");
   const usingPoints = state.points.length > 0;
-  input.disabled = usingPoints;
-  input.title = usingPoints ? "当前使用点选模式；清空点后可改用名称选择" : "";
-  input.placeholder = usingPoints ? "当前按点选识别；清空点后可输入名称" : "例如：头发、人物、红色杯子";
+  input.disabled = false;
+  input.title = "";
+  input.placeholder = state.selectionMode === "box"
+    ? "可选：填写标题或对象名称，框选范围优先"
+    : usingPoints ? "当前按点选识别；清空点后可输入名称" : "例如：头发、人物、红色杯子";
+  $("#pointModeControls").classList.toggle("hidden", state.selectionMode !== "point");
+  $("#selectionHint").textContent = state.selectionMode === "box"
+    ? "在图片上按住鼠标拖拽，框出完整标题或需要修改的区域。"
+    : "直接点图：普通点击添加目标点，按住 Shift 点击添加排除点。";
+  $("#clearSelection").classList.toggle("hidden", !state.points.length && !state.box);
+  $("#segmentButton").textContent = state.selectionMode === "box"
+    ? "使用框选范围并预览"
+    : "识别并预览修改范围";
 }
 
 $("#stageCanvas").addEventListener("click", event => {
-  if (!state.project || !state.canvasImage) return;
-  const canvas = event.currentTarget;
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  state.points.push({
-    x: Math.max(0, Math.min(canvas.width - 1, Math.round((event.clientX - rect.left) * scaleX))),
-    y: Math.max(0, Math.min(canvas.height - 1, Math.round((event.clientY - rect.top) * scaleY))),
-    label: event.shiftKey ? 0 : state.pointLabel,
-  });
+  if (!state.project || !state.canvasImage || state.selectionMode !== "point") return;
+  state.points.push({...canvasPoint(event), label: event.shiftKey ? 0 : state.pointLabel});
   syncSegmentInputMode();
   drawPoints();
   toast(event.shiftKey ? "已添加排除点" : "已添加目标点");
+});
+
+$("#stageCanvas").addEventListener("pointerdown", event => {
+  if (!state.project || !state.canvasImage || state.selectionMode !== "box") return;
+  state.dragging = true;
+  state.dragStart = canvasPoint(event);
+  state.box = normalizedBox(state.dragStart, state.dragStart);
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  drawPoints();
+});
+
+$("#stageCanvas").addEventListener("pointermove", event => {
+  if (!state.dragging || state.selectionMode !== "box") return;
+  state.box = normalizedBox(state.dragStart, canvasPoint(event));
+  drawPoints();
+});
+
+$("#stageCanvas").addEventListener("pointerup", event => {
+  if (!state.dragging || state.selectionMode !== "box") return;
+  state.dragging = false;
+  state.box = normalizedBox(state.dragStart, canvasPoint(event));
+  state.dragStart = null;
+  const valid = state.box.x_max - state.box.x_min >= 4 && state.box.y_max - state.box.y_min >= 4;
+  if (!valid) state.box = null;
+  syncSegmentInputMode();
+  drawPoints();
+  if (valid) toast("已框选修改区域；可以预览或直接生成");
 });
 
 $("#uploadButton").onclick = () => $("#fileInput").click();
@@ -288,15 +352,35 @@ $$('[data-point-label]').forEach(button => button.onclick = () => {
   button.classList.add("active"); state.pointLabel = Number(button.dataset.pointLabel);
 });
 $("#clearPoints").onclick = () => { state.points = []; syncSegmentInputMode(); drawPoints(); };
+$("#clearSelection").onclick = () => {
+  state.points = [];
+  state.box = null;
+  syncSegmentInputMode();
+  drawPoints();
+};
+
+$$('[data-selection-mode]').forEach(button => button.onclick = () => {
+  $$('[data-selection-mode]').forEach(item => item.classList.remove("active"));
+  button.classList.add("active");
+  state.selectionMode = button.dataset.selectionMode;
+  state.points = [];
+  state.box = null;
+  // Text/title replacements generally need only a small safety margin;
+  // ordinary object replacements retain the handoff's 35% baseline.
+  if (state.selectionMode === "box" && $("#growthMode")) $("#growthMode").value = "0.08";
+  syncSegmentInputMode();
+  drawPoints();
+});
 
 $("#segmentButton").onclick = async () => {
   const prompt = $("#segmentPrompt").value.trim();
-  if (!state.points.length && !prompt) return toast("请先点一下目标，或填写目标名称", true);
+  const boxes = state.box ? [state.box] : [];
+  if (!state.points.length && !boxes.length && !prompt) return toast("请先点一下目标、拖拽框选，或填写目标名称", true);
   const button = $("#segmentButton"); button.disabled = true; button.textContent = "SAM3 正在理解目标…";
   try {
     const mask = await api(`/api/projects/${state.project.id}/segment`, {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({points: state.points, prompt, source_ref: state.sourceRef}),
+      body: JSON.stringify({points: state.points, boxes, prompt, source_ref: state.sourceRef}),
     });
     state.activeMask = mask;
     state.targetMask = mask;
@@ -309,7 +393,7 @@ $("#segmentButton").onclick = async () => {
     await persistLayerDraft();
     toast("SAM3 已按语义选中目标，可以直接生成");
   } catch (error) { toast(error.message, true); }
-  finally { button.disabled = false; button.textContent = "识别并预览修改范围"; }
+  finally { button.disabled = false; button.textContent = state.selectionMode === "box" ? "使用框选范围并预览" : "识别并预览修改范围"; }
 };
 
 $$('[data-operation]').forEach(button => button.onclick = () => {

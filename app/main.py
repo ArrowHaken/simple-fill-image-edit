@@ -102,6 +102,24 @@ def _mask_record(project: dict, mask_id: str) -> dict:
     return record
 
 
+def _box_mask(source: Path, boxes: list[dict]) -> np.ndarray:
+    """Create a safe pixel mask from user-drawn rectangles."""
+    image = read_rgb(source)
+    height, width = image.shape[:2]
+    mask = np.zeros((height, width), dtype=np.uint8)
+    for box in boxes:
+        x_min = max(0, min(width, int(box.get("x_min", 0))))
+        y_min = max(0, min(height, int(box.get("y_min", 0))))
+        x_max = max(0, min(width, int(box.get("x_max", 0))))
+        y_max = max(0, min(height, int(box.get("y_max", 0))))
+        if x_max <= x_min or y_max <= y_min:
+            continue
+        mask[y_min:y_max, x_min:x_max] = 255
+    if not np.any(mask):
+        raise HTTPException(400, "框选范围无效，请重新拖拽一个更大的区域")
+    return mask
+
+
 def _generation_prompt(task: dict, mask_meta: dict) -> str:
     """Turn the common short UI command into the handoff's proven prompt.
 
@@ -235,9 +253,23 @@ def segment(project_id: str, request: SegmentRequest):
         source = _resolve_source(project, request.source_ref)
         points = [item.model_dump() for item in request.points]
         boxes = [item.model_dump() for item in request.boxes]
-        mask, provider = sam3_segment(
-            source, points=points, boxes=boxes, prompt=request.prompt,
-        )
+        try:
+            mask, provider = sam3_segment(
+                source, points=points, boxes=boxes, prompt=request.prompt,
+            )
+        except Exception as exc:
+            # Decorative/Chinese ad text is not a reliable SAM3 semantic
+            # category.  A user-drawn box is an explicit spatial contract, so
+            # keep the workflow usable when SAM3 returns an empty mask.
+            if not boxes:
+                raise
+            mask = _box_mask(source, boxes)
+            provider = {
+                "provider": "manual-box-fallback",
+                "input_mode": "box",
+                "sam3_error": str(exc)[:500],
+                "mask_semantics": "white_pixels_are_editable",
+            }
         mask_id = storage.new_id("mask")
         folder = storage.project_dir(project_id) / "masks"
         Image.fromarray(mask).save(folder / f"{mask_id}.png")

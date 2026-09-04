@@ -32,13 +32,18 @@
 
       <section class="section disabled" id="editControls">
         <div class="section-head"><h2>1 · 告诉我修改什么</h2><button class="text-button hidden" id="clearPoints">清空点</button></div>
-        <p class="hint">直接写对象名称，SAM3 会按语义理解完整目标，不需要手动画蒙版。</p>
-        <label class="field"><span>原图中的对象</span><input id="segmentPrompt" maxlength="32" placeholder="例如：人物手中的书、红色杯子"></label>
-        <div class="mode-switch point-mode" aria-label="点选模式">
+        <p class="hint">普通物体可输入名称；广告标题、文字或难识别区域，推荐直接拖拽框选。</p>
+        <label class="field"><span>原图中的对象或文字</span><input id="segmentPrompt" maxlength="64" placeholder="例如：书、人物手中的眼镜、全屋网速起飞"></label>
+        <div class="mode-switch selection-mode" aria-label="选区模式">
+          <button type="button" data-selection-mode="point" class="active">点选目标</button>
+          <button type="button" data-selection-mode="box">拖拽框选</button>
+        </div>
+        <div class="mode-switch point-mode" id="pointModeControls" aria-label="点选类型">
           <button type="button" data-point-label="1" class="active"><span class="dot positive"></span>添加目标点</button>
           <button type="button" data-point-label="0"><span class="dot negative"></span>排除误选点</button>
         </div>
-        <p class="hint">也可以直接点图：普通点击添加目标点，按住 Shift 点击添加排除点。</p>
+        <p class="hint" id="selectionHint">直接点图：普通点击添加目标点，按住 Shift 点击添加排除点。</p>
+        <button class="text-button hidden" id="clearSelection" type="button">清空选区</button>
         <button class="secondary full" id="segmentButton">识别并预览修改范围</button>
         <div class="mask-summary" id="maskSummary"><span>尚未生成蒙版</span></div>
         <div class="mask-role hidden" id="maskRoleControls">
@@ -58,7 +63,7 @@
         <div class="occlusion-summary hidden" id="occlusionSummary"></div>
         <details class="advanced">
           <summary><span>边缘与专业设置</span><small>默认通常最好</small></summary>
-          <label class="field"><span>新对象可用空间</span><select id="growthMode"><option value="0.35" selected>自动 · 推荐</option><option value="0.12">接近原对象大小</option><option value="0.65">更大范围</option></select></label>
+          <label class="field"><span>新对象可用空间</span><select id="growthMode"><option value="0.35" selected>自动 · 推荐</option><option value="0.08">标题/文字 · 推荐</option><option value="0.12">接近原对象大小</option><option value="0.65">更大范围</option></select></label>
           <label class="range-field"><span>清除旧边缘 <output id="dilationOutput">6 px</output></span><input id="dilation" type="range" min="0" max="24" value="6"></label>
           <label class="range-field"><span>最外侧接缝 <output id="featherOutput">3 px</output></span><input id="feather" type="range" min="0" max="8" value="3"></label>
           <label class="range-field hidden"><span>旧物清理外扩 <output id="cleanupRadiusOutput">10 px</output></span><input id="cleanupRadius" type="range" min="0" max="24" value="10"></label>
