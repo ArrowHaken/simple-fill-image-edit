@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$out = Join-Path $repo $Output
+$out = if ([System.IO.Path]::IsPathRooted($Output)) { $Output } else { Join-Path $repo $Output }
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("catsco-artifact-" + [guid]::NewGuid().ToString('N'))
 
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
