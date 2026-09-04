@@ -24,6 +24,8 @@ const state = {
   canvasImage: null,
   zoom: 1,
   fitZoom: 1,
+  compareMode: false,
+  libraryCollapsed: false,
   polling: null,
   health: null,
 };
@@ -109,6 +111,9 @@ function renderProject() {
   // gets that space back until the first result is actually available.
   $(".stage-column").classList.toggle("has-versions", p.versions.length > 0);
   $("#filmstrip").classList.toggle("hidden", p.versions.length === 0);
+  $("#compareButton").disabled = p.versions.length === 0;
+  $("#compareButton").textContent = state.compareMode ? "返回单图" : "原图对比";
+  syncZoomControls();
   $("#versionCount").textContent = `${p.versions.length} 个结果`;
   const cards = [`<article class="version-card source-card ${state.sourceRef === "source" ? "active" : ""}" data-source-ref="source"><img src="${mediaUrl(p.source_url)}"><span>原始素材</span></article>`];
   p.versions.forEach(version => cards.push(`<article class="version-card ${state.sourceRef === version.id ? "active" : ""}" data-source-ref="${version.id}" data-url="${version.url}"><img src="${mediaUrl(version.url)}"><span>${operationName(version.operation)} · ${shortId(version.id)}</span></article>`));
@@ -157,6 +162,7 @@ function taskCard(task) {
 }
 
 async function selectSource(sourceRef, url) {
+  if (state.compareMode) hideComparison();
   state.sourceRef = sourceRef;
   state.activeVersionId = sourceRef === "source" ? null : sourceRef;
   state.activeMask = null;
@@ -203,9 +209,11 @@ async function showImage(url, label, resetMask = false) {
     $("#zoomOut").disabled = false;
     $("#zoomValue").disabled = false;
     $("#zoomIn").disabled = false;
+    $("#compareButton").disabled = !state.project?.versions?.length;
     $("#downloadCurrent").classList.remove("disabled");
     $("#downloadCurrent").href = prefixedUrl(url);
     $("#downloadCurrent").setAttribute("download", "");
+    syncZoomControls();
     requestAnimationFrame(() => fitCanvasToStage());
   };
   image.onerror = () => toast("图片加载失败", true);
@@ -237,6 +245,42 @@ function drawPoints() {
     ctx.strokeRect(x_min, y_min, x_max - x_min, y_max - y_min);
     ctx.restore();
   }
+}
+
+function syncZoomControls() {
+  const ready = Boolean(state.canvasImage) && !state.compareMode;
+  ["zoomOut", "zoomValue", "zoomIn", "fitCanvas"].forEach(id => {
+    const button = $("#" + id);
+    if (button) button.disabled = !ready;
+  });
+}
+
+function comparisonVersion() {
+  if (!state.project?.versions?.length) return null;
+  return state.sourceRef !== "source"
+    ? state.project.versions.find(item => item.id === state.sourceRef) || state.project.versions[0]
+    : state.project.versions[0];
+}
+
+function showComparison() {
+  const version = comparisonVersion();
+  if (!version) return toast("完成一次修改后才能进行原图对比", true);
+  state.compareMode = true;
+  $("#stageCanvas").classList.add("hidden");
+  $("#emptyState").classList.add("hidden");
+  $("#compareOriginal").src = mediaUrl(state.project.source_url);
+  $("#compareResult").src = mediaUrl(version.url);
+  $("#compareView").classList.remove("hidden");
+  $("#compareButton").textContent = "返回单图";
+  syncZoomControls();
+}
+
+function hideComparison() {
+  state.compareMode = false;
+  $("#compareView").classList.add("hidden");
+  $("#stageCanvas").classList.remove("hidden");
+  $("#compareButton").textContent = "原图对比";
+  syncZoomControls();
 }
 
 const ZOOM_STEPS = [0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
@@ -538,6 +582,17 @@ async function resumeTask(taskId) {
 }
 
 $("#showSource").onclick = returnToSelectedSource;
+$("#compareButton").onclick = () => state.compareMode ? hideComparison() : showComparison();
+$("#toggleLibrary").onclick = () => {
+  state.libraryCollapsed = true;
+  $(".workspace").classList.add("library-collapsed");
+  $("#showLibrary").classList.remove("hidden");
+};
+$("#showLibrary").onclick = () => {
+  state.libraryCollapsed = false;
+  $(".workspace").classList.remove("library-collapsed");
+  $("#showLibrary").classList.add("hidden");
+};
 $("#zoomOut").onclick = () => stepZoom(-1);
 $("#zoomIn").onclick = () => stepZoom(1);
 $("#zoomValue").onclick = fitCanvasToStage;

@@ -140,6 +140,15 @@ def _generation_prompt(task: dict, mask_meta: dict) -> str:
     ):
         return prompt
     target = str(mask_meta.get("prompt", "")).strip() or "选区内原对象"
+    remove_match = re.search(r"(?:把|将)?(?:原图中的)?(.+?)(?:去掉|删除|移除|擦除|去除)$", prompt)
+    if remove_match:
+        target = remove_match.group(1).strip() or target
+        return (
+            f"彻底移除{target}，不要生成任何替代对象。"
+            f"恢复{target}遮挡的沙发、背景和纹理，使画面看起来自然连续。"
+            f"蒙版内不得保留{target}的任何可见部分，也不要保留人物轮廓、阴影或残影。"
+            "保持其他人物、物体、构图、透视、光照和原图风格完全不变。"
+        )
     replacement = prompt
     match = re.search(r"(?:把|将)?(?:原图中的)?(.+?)(?:改成|换成|变成|替换成|替换为)(.+)$", prompt)
     if match:
