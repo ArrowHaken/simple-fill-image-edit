@@ -118,6 +118,8 @@ def health():
         "image2_ssh_key_ready": settings.ssh_key.is_file(),
         "image2_native_mask_ready": settings.masked_image2_key_ready or settings.ssh_key.is_file(),
         "image2_native_mask_route": (
+            "catsco-gateway" if settings.masked_image2_transport in {"json", "json-data-url", "catsco-json"}
+            and settings.masked_image2_key_ready else
             "direct-openai" if settings.masked_image2_key_ready else
             "catsco-gateway" if settings.ssh_key.is_file() else "unavailable"
         ),
