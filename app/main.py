@@ -586,11 +586,25 @@ def _run_task(project_id: str, task_id: str) -> None:
                     commit_mask = effective_mask.copy()
                     Image.fromarray(commit_mask).save(task_dir / "commit-mask.png")
                     if task.get("pipeline_mode") == "simple_fill":
+                        # Image2 returns a complete crop whose low-frequency
+                        # lighting can differ slightly from the source.  A
+                        # few pixels of feathering leaves a visible rectangle
+                        # on large posters, so derive a wider seam from the
+                        # generated envelope while keeping the user's value
+                        # as the minimum.
+                        generated_feather = min(
+                            32,
+                            max(
+                                int(task.get("feather", 3)),
+                                16,
+                                int((simple_mask_record or {}).get("growth_radius_px", 0) * 0.45),
+                            ),
+                        )
                         result = feathered_composite(
                             original,
                             candidate_full,
                             commit_mask,
-                            feather_px=task.get("feather", 3),
+                            feather_px=generated_feather,
                             operation="fill",
                         )
                         quality_report = build_quality_report(
@@ -623,6 +637,16 @@ def _run_task(project_id: str, task_id: str) -> None:
                         layered_masks["generation_guard"],
                         feather_px=task.get("feather", 5),
                     )
+            recorded_feather = task.get("feather", 5)
+            if task.get("pipeline_mode") == "simple_fill":
+                recorded_feather = min(
+                    32,
+                    max(
+                        int(task.get("feather", 3)),
+                        16,
+                        int((simple_mask_record or {}).get("growth_radius_px", 0) * 0.45),
+                    ),
+                )
             provider_record["inpaint_anything"] = {
                 "mode": task.get("pipeline_mode", "legacy"),
                 "crop_size": 512,
@@ -632,7 +656,7 @@ def _run_task(project_id: str, task_id: str) -> None:
                 "upstream_preprocess": "utils.mask_processing.crop_for_filling_pre",
                 "upstream_postprocess": "utils.mask_processing.crop_for_filling_post",
                 "mask_expansion_radius_px": task["dilation"],
-                "blend_feather_px": task.get("feather", 5),
+                "blend_feather_px": recorded_feather,
                 "clean_plate_first": task.get("pipeline_mode") == "object_v2",
                 "cleanup_radius_px": task.get("cleanup_radius", 10),
                 "semantic_edge_px": task.get("semantic_edge", 6),
