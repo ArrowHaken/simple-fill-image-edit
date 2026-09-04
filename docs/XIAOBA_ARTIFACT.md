@@ -17,12 +17,18 @@ Artifact 入口是 `artifact/manifest.json`，实际页面由现有 FastAPI 工�
 
 - 已验证上传、SAM3 目标分割、CatsCo JSON 原生蒙版 Image2、结果回填。
 - 已验证编辑范围外像素不被提交结果污染。
-- 未部署到生产服务器；需要由 XiaoBa worker 或受保护的 CatsCo 服务托管。
+- 已部署到天选打工仔的独立 systemd 服务（仅监听 `127.0.0.1:20001`），并通过既有 HTTPS 域名的受保护子路径提供访问。
 - Artifact 包不包含 API key、SSH 密钥、真实图片和历史任务数据。
+
+## 当前交付入口
+
+- URL：`https://agent-407.artifacts.catsco.fun:19991/catsco-image-edit/`
+- 入口使用独立 Basic Auth；凭据通过交付渠道单独提供，不写入仓库。
+- 该入口是受保护的 staging 发布，未改动原有 Artifact、visual workspace 或 CatsCo agent 路由。
 
 ## 下一步接入
 
 1. 在 XiaoBa 的 mini-app/artifact 运行环境中解包并安装 Python 依赖。
 2. 通过运行时 Secret 注入 WaveSpeed 与 CatsCo 网关认证。
-3. 启动 `python run.py`，把 Artifact URL 绑定到当前会话。
-4. 用海报样例验证一次 `glasses → remove` 或 `book → white cat`。
+3. 将 XiaoBa 会话鉴权接到当前工作台，替换临时 Basic Auth。
+4. 用广告素材样例继续收集提示词、分割覆盖率和成图质量数据。
