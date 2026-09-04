@@ -113,7 +113,12 @@ def _generation_prompt(task: dict, mask_meta: dict) -> str:
     prompt = str(task.get("prompt", "")).strip()
     if task.get("operation") != "fill" or task.get("pipeline_mode") != "simple_fill":
         return prompt
-    if len(prompt) > 24:
+    # Preserve the handoff's already-structured prompts verbatim.  A detailed
+    # Chinese prompt can be short in character count, so semantic markers are
+    # safer than length alone.
+    if len(prompt) > 24 or any(
+        marker in prompt for marker in ("完整替换", "保持", "原图", "蒙版", "构图", "姿态")
+    ):
         return prompt
     target = str(mask_meta.get("prompt", "")).strip() or "选区内原对象"
     replacement = prompt
