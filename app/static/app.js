@@ -1,6 +1,10 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const API_PREFIX = location.pathname.startsWith("/catsco-image-edit/") ? "/catsco-image-edit" : "";
+const API_PREFIX = location.pathname.startsWith("/catsco-image-edit/")
+  ? "/catsco-image-edit"
+  : location.pathname.startsWith("/artifacts/")
+    ? "/catsco-image-edit-api"
+    : "";
 
 const state = {
   project: null,
