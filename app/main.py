@@ -19,7 +19,7 @@ from . import storage
 from .compositor import (
     build_occlusion_masks, build_simple_fill_mask, composite, composite_occlusion_layers, expand_mask,
     feathered_composite, image2_mask_guide,
-    mask_preview, read_mask, read_rgb,
+    mask_preview, read_mask, read_rgb, seamless_composite,
 )
 from .config import settings
 from .image2_remote import run_image2
@@ -121,6 +121,10 @@ def _box_mask(source: Path, boxes: list[dict]) -> np.ndarray:
     return mask
 
 
+def _is_removal_prompt(prompt: str) -> bool:
+    return bool(re.search(r"(?:去掉|删除|移除|擦除|去除)(?:掉)?(?:。|！|!|\s)*$", prompt.strip()))
+
+
 def _generation_prompt(task: dict, mask_meta: dict) -> str:
     """Turn the common short UI command into the handoff's proven prompt.
 
@@ -132,6 +136,19 @@ def _generation_prompt(task: dict, mask_meta: dict) -> str:
     prompt = str(task.get("prompt", "")).strip()
     if task.get("operation") != "fill" or task.get("pipeline_mode") != "simple_fill":
         return prompt
+    target = str(mask_meta.get("prompt", "")).strip() or "选区内原对象"
+    remove_match = re.search(
+        r"(?:把|将)?(?:原图中的)?(.+?)(?:去掉|删除|移除|擦除|去除)(?:掉)?(?:。|！|!|\s)*$",
+        prompt,
+    )
+    if remove_match:
+        target = remove_match.group(1).strip() or target
+        return (
+            f"彻底移除{target}，不要生成任何替代对象。"
+            f"恢复{target}遮挡的背景、承托表面和纹理，使画面自然连续。"
+            f"蒙版内不得保留{target}的任何可见部分，也不要保留轮廓、阴影或残影。"
+            "不要新增靠垫、装饰品或其他物体。保持其他人物、物体、构图、透视、光照和原图风格完全不变。"
+        )
     # Preserve the handoff's already-structured prompts verbatim.  A detailed
     # Chinese prompt can be short in character count, so semantic markers are
     # safer than length alone.
@@ -139,16 +156,6 @@ def _generation_prompt(task: dict, mask_meta: dict) -> str:
         marker in prompt for marker in ("完整替换", "保持", "原图", "蒙版", "构图", "姿态")
     ):
         return prompt
-    target = str(mask_meta.get("prompt", "")).strip() or "选区内原对象"
-    remove_match = re.search(r"(?:把|将)?(?:原图中的)?(.+?)(?:去掉|删除|移除|擦除|去除)$", prompt)
-    if remove_match:
-        target = remove_match.group(1).strip() or target
-        return (
-            f"彻底移除{target}，不要生成任何替代对象。"
-            f"恢复{target}遮挡的沙发、背景和纹理，使画面看起来自然连续。"
-            f"蒙版内不得保留{target}的任何可见部分，也不要保留人物轮廓、阴影或残影。"
-            "保持其他人物、物体、构图、透视、光照和原图风格完全不变。"
-        )
     replacement = prompt
     match = re.search(r"(?:把|将)?(?:原图中的)?(.+?)(?:改成|换成|变成|替换成|替换为)(.+)$", prompt)
     if match:
@@ -592,7 +599,24 @@ def _run_task(project_id: str, task_id: str) -> None:
                     )
             else:
                 if native_mask_direct:
-                    commit_mask = effective_mask.copy()
+                    removal_fill = _is_removal_prompt(task.get("prompt", ""))
+                    if removal_fill:
+                        # Generation gets a generous context envelope, but a
+                        # removal only commits the user-selected object plus a
+                        # small cleanup margin. Committing the whole envelope
+                        # imports Image2's crop-wide exposure shift as a block.
+                        cleanup_radius = min(
+                            int(task.get("cleanup_radius", 10)),
+                            int((simple_mask_record or {}).get("growth_radius_px", 0)),
+                        )
+                        commit_mask = np.where(
+                            (expand_mask(mask, cleanup_radius) > 0)
+                            & (effective_mask > 0),
+                            255,
+                            0,
+                        ).astype(np.uint8)
+                    else:
+                        commit_mask = effective_mask.copy()
                     Image.fromarray(commit_mask).save(task_dir / "commit-mask.png")
                     if task.get("pipeline_mode") == "simple_fill":
                         # Image2 returns a complete crop whose low-frequency
@@ -609,13 +633,21 @@ def _run_task(project_id: str, task_id: str) -> None:
                                 int((simple_mask_record or {}).get("growth_radius_px", 0) * 0.45),
                             ),
                         )
-                        result = feathered_composite(
-                            original,
-                            candidate_full,
-                            commit_mask,
-                            feather_px=generated_feather,
-                            operation="fill",
-                        )
+                        if removal_fill:
+                            result = seamless_composite(
+                                original,
+                                candidate_full,
+                                commit_mask,
+                                fallback_feather_px=generated_feather,
+                            )
+                        else:
+                            result = feathered_composite(
+                                original,
+                                candidate_full,
+                                commit_mask,
+                                feather_px=generated_feather,
+                                operation="fill",
+                            )
                         quality_report = build_quality_report(
                             original,
                             result,
@@ -674,7 +706,12 @@ def _run_task(project_id: str, task_id: str) -> None:
                 "result_object_prompt": result_object_prompt or None,
                 "result_segmentation": result_segmentation_record,
                 "composition_policy": (
-                    "native-mask-full-candidate"
+                    "removal-tight-commit-poisson"
+                    if (
+                        task.get("pipeline_mode") == "simple_fill"
+                        and _is_removal_prompt(task.get("prompt", ""))
+                    )
+                    else "native-mask-full-candidate"
                     if native_mask_direct else "semantic-result-object"
                 ),
                 "simple_fill_mask": simple_mask_record,

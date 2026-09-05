@@ -147,6 +147,49 @@ def feathered_composite(original: np.ndarray, generated: np.ndarray,
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
+def seamless_composite(original: np.ndarray, generated: np.ndarray,
+                       mask: np.ndarray, *, fallback_feather_px: int = 16) -> np.ndarray:
+    """Blend an edited patch without importing its low-frequency colour cast.
+
+    Image generators often reconstruct an entire crop with a slightly different
+    exposure. Alpha feathering softens its boundary but cannot remove the
+    resulting rectangular light/dark block. Poisson cloning preserves generated
+    structure while solving its colour field against the source at the approved
+    commit boundary.
+    """
+    h, w = original.shape[:2]
+    if generated.shape[:2] != (h, w):
+        generated = cv2.resize(generated, (w, h), interpolation=cv2.INTER_LANCZOS4)
+    binary = np.where(mask > 0, 255, 0).astype(np.uint8)
+    x, y, width, height = cv2.boundingRect(binary)
+    if (
+        width < 3 or height < 3
+        or x <= 0 or y <= 0
+        or x + width >= w or y + height >= h
+    ):
+        return feathered_composite(
+            original, generated, binary,
+            feather_px=fallback_feather_px, operation="fill",
+        )
+    try:
+        patch = generated[y:y + height, x:x + width].copy()
+        # OpenCV mutates the supplied mask in some builds, so keep a private copy.
+        patch_mask = binary[y:y + height, x:x + width].copy()
+        center = (x + width // 2, y + height // 2)
+        result = cv2.seamlessClone(
+            patch, original, patch_mask, center, cv2.NORMAL_CLONE,
+        )
+        # OpenCV may change a handful of pixels immediately outside the mask by
+        # one code value. Preserve the editor's exact outside-pixel contract.
+        result[binary == 0] = original[binary == 0]
+        return result
+    except cv2.error:
+        return feathered_composite(
+            original, generated, binary,
+            feather_px=fallback_feather_px, operation="fill",
+        )
+
+
 def composite(original: np.ndarray, generated: np.ndarray,
               mask: np.ndarray, operation: str) -> np.ndarray:
     h, w = original.shape[:2]

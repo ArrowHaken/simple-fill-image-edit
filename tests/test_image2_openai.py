@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import settings
 from app.compositor import (
     build_occlusion_masks, composite_occlusion_layers, expand_mask,
-    feathered_composite,
+    feathered_composite, seamless_composite,
 )
 from app.image2_openai import build_alpha_mask, run_masked_image2
 
@@ -103,6 +103,34 @@ class MaskedImage2Tests(unittest.TestCase):
         self.assertTrue(np.array_equal(result[10, 10], generated[10, 10]))
         self.assertTrue(np.all(result[4, 10] > original[4, 10]))
         self.assertTrue(np.all(result[4, 10] < generated[4, 10]))
+
+    def test_seamless_composite_removes_flat_patch_colour_cast(self):
+        height, width = 100, 120
+        original = np.zeros((height, width, 3), dtype=np.uint8)
+        original[:, :, :] = (30, 130, 220)
+        generated = original.copy()
+        generated[25:75, 35:85] = (20, 105, 195)
+        generated[45:55, 55:65] = (220, 90, 30)
+        mask = np.zeros((height, width), dtype=np.uint8)
+        mask[25:75, 35:85] = 255
+
+        result = seamless_composite(original, generated, mask)
+
+        self.assertTrue(np.array_equal(result[mask == 0], original[mask == 0]))
+        boundary_ring = np.zeros_like(mask, dtype=bool)
+        boundary_ring[27:31, 40:80] = True
+        self.assertLess(
+            float(np.mean(np.abs(
+                result[boundary_ring].astype(float) - original[boundary_ring],
+            ))),
+            3.0,
+        )
+        self.assertGreater(
+            float(np.mean(np.abs(
+                result[48:52, 58:62].astype(float) - original[48:52, 58:62],
+            ))),
+            15.0,
+        )
 
     def test_alpha_mask_makes_selected_pixels_transparent(self):
         mask = np.zeros((4, 4), dtype=np.uint8)

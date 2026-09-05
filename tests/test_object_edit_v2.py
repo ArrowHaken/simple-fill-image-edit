@@ -23,6 +23,17 @@ from app.config import settings
 
 
 class ObjectEditV2Tests(unittest.TestCase):
+    def test_removal_prompt_is_expanded_before_structured_prompt_shortcut(self):
+        task = {
+            "operation": "fill",
+            "pipeline_mode": "simple_fill",
+            "prompt": "把原图中的沙发女孩删除",
+        }
+        prompt = main._generation_prompt(task, {"prompt": "女孩"})
+        self.assertIn("彻底移除沙发女孩", prompt)
+        self.assertIn("不要生成任何替代对象", prompt)
+        self.assertIn("不要新增靠垫", prompt)
+
     def test_clean_plate_expands_old_object_but_keeps_protected_interior(self):
         target = np.zeros((48, 48), dtype=np.uint8)
         target[18:30, 18:30] = 255
