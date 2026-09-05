@@ -122,7 +122,10 @@ def _box_mask(source: Path, boxes: list[dict]) -> np.ndarray:
 
 
 def _is_removal_prompt(prompt: str) -> bool:
-    return bool(re.search(r"(?:去掉|删除|移除|擦除|去除)(?:掉)?(?:。|！|!|\s)*$", prompt.strip()))
+    return bool(re.search(
+        r"(?:去掉|删掉|删去|删除|移除|擦除|去除)(?:。|！|!|\s)*$",
+        prompt.strip(),
+    ))
 
 
 def _generation_prompt(task: dict, mask_meta: dict) -> str:
@@ -138,7 +141,7 @@ def _generation_prompt(task: dict, mask_meta: dict) -> str:
         return prompt
     target = str(mask_meta.get("prompt", "")).strip() or "选区内原对象"
     remove_match = re.search(
-        r"(?:把|将)?(?:原图中的)?(.+?)(?:去掉|删除|移除|擦除|去除)(?:掉)?(?:。|！|!|\s)*$",
+        r"(?:把|将)?(?:原图中的)?(.+?)(?:去掉|删掉|删去|删除|移除|擦除|去除)(?:。|！|!|\s)*$",
         prompt,
     )
     if remove_match:
