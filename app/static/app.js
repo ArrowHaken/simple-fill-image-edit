@@ -324,10 +324,12 @@ function fitCanvasToStage() {
 }
 
 function stepZoom(direction) {
-  const epsilon = 0.0001;
+  // Fitted images often land just below a preset (for example 32.7% next to
+  // 33.3%). Skipping near-identical presets makes every click visibly useful.
+  const minimumRatio = 1.08;
   const next = direction > 0
-    ? ZOOM_STEPS.find(value => value > state.zoom + epsilon) ?? 8
-    : [...ZOOM_STEPS].reverse().find(value => value < state.zoom - epsilon) ?? 0.1;
+    ? ZOOM_STEPS.find(value => value > state.zoom * minimumRatio) ?? 8
+    : [...ZOOM_STEPS].reverse().find(value => value < state.zoom / minimumRatio) ?? 0.1;
   applyZoom(next);
 }
 
