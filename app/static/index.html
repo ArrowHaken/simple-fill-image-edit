@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CatsCo 语义局部重绘 · Fill Anything</title>
-  <link rel="stylesheet" href="static/styles.css?v=13">
+  <title>CatsCo图片素材工作台</title>
+  <link rel="stylesheet" href="static/styles.css?v=14">
   <link rel="stylesheet" href="assets/catsco-standard-footer.css">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">C</span>
-      <div><strong>CatsCo 语义局部重绘</strong><small>SAM3 · IMAGE2 · FILL ANYTHING</small></div>
+      <div><strong>CatsCo图片素材工作台</strong><small>SAM3 · IMAGE2 · FILL ANYTHING</small></div>
     </div>
     <div class="project-title" id="projectTitle">尚未打开项目</div>
     <div class="health" id="healthBadges">
@@ -35,16 +35,16 @@
         <p class="hint">普通物体可输入名称；广告标题、文字或难识别区域，推荐直接拖拽框选。</p>
         <label class="field"><span>原图中的对象或文字</span><input id="segmentPrompt" maxlength="64" placeholder="例如：书、人物手中的眼镜、全屋网速起飞"></label>
         <div class="mode-switch selection-mode" aria-label="选区模式">
-          <button type="button" data-selection-mode="point" class="active">点选目标</button>
-          <button type="button" data-selection-mode="box">拖拽框选</button>
+          <button type="button" data-selection-mode="point">点选目标</button>
+          <button type="button" data-selection-mode="box" class="active">拖拽框选</button>
         </div>
-        <div class="mode-switch point-mode" id="pointModeControls" aria-label="点选类型">
+        <div class="mode-switch point-mode hidden" id="pointModeControls" aria-label="点选类型">
           <button type="button" data-point-label="1" class="active"><span class="dot positive"></span>添加目标点</button>
           <button type="button" data-point-label="0"><span class="dot negative"></span>排除误选点</button>
         </div>
-        <p class="hint" id="selectionHint">直接点图：普通点击添加目标点，按住 Shift 点击添加排除点。</p>
+        <p class="hint" id="selectionHint">在图片上按住鼠标拖拽，框出完整标题或需要修改的区域。</p>
         <button class="text-button hidden" id="clearSelection" type="button">清空选区</button>
-        <button class="secondary full" id="segmentButton">识别并预览修改范围</button>
+        <button class="secondary full" id="segmentButton">使用框选范围并预览</button>
         <div class="mask-summary" id="maskSummary"><span>尚未生成蒙版</span></div>
         <div class="mask-role hidden" id="maskRoleControls">
           <button class="role-target" id="setTargetMask">设为修改目标</button>
@@ -63,7 +63,7 @@
         <div class="occlusion-summary hidden" id="occlusionSummary"></div>
         <details class="advanced">
           <summary><span>边缘与专业设置</span><small>默认通常最好</small></summary>
-          <label class="field"><span>新对象可用空间</span><select id="growthMode"><option value="0.35" selected>自动 · 推荐</option><option value="0.20">框选标题 · 安全外扩</option><option value="0.08">精确文字 · 小范围</option><option value="0.12">接近原对象大小</option><option value="0.65">更大范围</option></select></label>
+          <label class="field"><span>新对象可用空间</span><select id="growthMode"><option value="0.35">自动 · 推荐</option><option value="0.20" selected>框选区域 · 安全外扩</option><option value="0.08">精确文字 · 小范围</option><option value="0.12">接近原对象大小</option><option value="0.65">更大范围</option></select></label>
           <label class="range-field"><span>清除旧边缘 <output id="dilationOutput">6 px</output></span><input id="dilation" type="range" min="0" max="24" value="6"></label>
           <label class="range-field"><span>最外侧接缝 <output id="featherOutput">3 px</output></span><input id="feather" type="range" min="0" max="8" value="3"></label>
           <label class="range-field hidden"><span>旧物清理外扩 <output id="cleanupRadiusOutput">10 px</output></span><input id="cleanupRadius" type="range" min="0" max="24" value="10"></label>
@@ -140,6 +140,6 @@
       </div>
     </div>
   </footer>
-  <script src="static/app.js?v=13"></script>
+  <script src="static/app.js?v=14"></script>
 </body>
 </html>

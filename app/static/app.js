@@ -16,7 +16,7 @@ const state = {
   protectedMasks: [],
   points: [],
   box: null,
-  selectionMode: "point",
+  selectionMode: "box",
   dragStart: null,
   dragging: false,
   pointLabel: 1,
