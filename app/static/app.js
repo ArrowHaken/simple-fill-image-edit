@@ -90,16 +90,19 @@ async function openProject(projectId) {
   state.sourceRef = "source";
   state.activeVersionId = null;
   const draft = state.project.edit_draft?.source_ref === "source" ? state.project.edit_draft : null;
-  const remembered = state.project.masks.find(item => item.id === (draft?.target_mask_id || state.project.active_mask_id) && (item.source_ref || "source") === "source") || null;
+  const rememberedCandidate = state.project.masks.find(item => item.id === (draft?.target_mask_id || state.project.active_mask_id) && (item.source_ref || "source") === "source") || null;
+  const remembered = state.selectionMode === "box"
+    ? (rememberedCandidate?.boxes?.length ? rememberedCandidate : null)
+    : ((rememberedCandidate?.points?.length || rememberedCandidate?.prompt) ? rememberedCandidate : null);
   state.activeMask = remembered;
   state.targetMask = remembered;
   state.protectedMasks = [];
-  state.points = [];
-  state.box = null;
+  state.points = state.selectionMode === "point" ? (remembered?.points || []) : [];
+  state.box = state.selectionMode === "box" ? (remembered?.boxes?.[0] || null) : null;
   syncSegmentInputMode();
   $("#projectTitle").textContent = state.project.name;
   $("#editControls").classList.remove("disabled");
-  $("#actionControls").classList.toggle("disabled", !state.targetMask);
+  $("#actionControls").classList.toggle("disabled", !canGenerateFromSelection());
   await showImage(state.project.source_url, "原始素材");
   renderProject();
 }
@@ -107,6 +110,7 @@ async function openProject(projectId) {
 function renderProject() {
   const p = state.project;
   if (!p) return;
+  $("#actionControls").classList.toggle("disabled", !canGenerateFromSelection());
   // Do not reserve a whole grid row for an empty version history.  The stage
   // gets that space back until the first result is actually available.
   $(".stage-column").classList.toggle("has-versions", p.versions.length > 0);
@@ -128,9 +132,12 @@ function renderProject() {
     $("#maskSummary").textContent = state.selectionMode === "box"
       ? `框选锚点已就绪 · 生成时自动外扩 · 当前覆盖 ${(state.activeMask.coverage * 100).toFixed(1)}%`
       : `蒙版已就绪 · 覆盖画面 ${(state.activeMask.coverage * 100).toFixed(1)}%`;
+  } else if (state.selectionMode === "box" && state.box) {
+    $("#maskSummary").className = "mask-summary ready";
+    $("#maskSummary").textContent = "框选范围已就绪；填写生成要求后即可生成";
   } else {
     $("#maskSummary").className = "mask-summary";
-    $("#maskSummary").textContent = "尚未生成蒙版";
+    $("#maskSummary").textContent = state.selectionMode === "box" ? "请先在图片上拖拽框选" : "尚未生成蒙版";
   }
   $("#maskRoleControls").classList.add("hidden");
   const layers = [];
@@ -139,10 +146,15 @@ function renderProject() {
   $("#layerSummary").classList.toggle("hidden", !layers.length);
   $("#layerSummary").innerHTML = layers.join("<br>");
   $("#clearProtection").classList.toggle("hidden", !state.protectedMasks.length);
-  $("#occlusionSummary").classList.toggle("hidden", !state.targetMask);
+  const hasSelection = Boolean(state.targetMask || (state.selectionMode === "box" && state.box));
+  $("#occlusionSummary").classList.toggle("hidden", !hasSelection);
   $("#occlusionSummary").innerHTML = state.targetMask
     ? `将修改 <b>${escapeHtml(state.targetMask.prompt || "已选目标")}</b>${state.protectedMasks.length ? `，并保持 <b>${state.protectedMasks.map(item => escapeHtml(item.prompt || "前景对象")).join("、")}</b> 原像素` : "；当前没有前景保护"}`
-    : "";
+    : hasSelection ? "将修改 <b>框选区域</b>；生成时会自动准备蒙版" : "";
+}
+
+function canGenerateFromSelection() {
+  return Boolean(state.targetMask || (state.selectionMode === "box" && state.box));
 }
 
 function taskCard(task) {
@@ -359,6 +371,11 @@ function syncSegmentInputMode() {
   input.placeholder = state.selectionMode === "box"
     ? "可选：填写标题或对象名称，框选范围优先"
     : usingPoints ? "当前按点选识别；清空点后可输入名称" : "例如：头发、人物、红色杯子";
+  $("#segmentPromptField").classList.toggle("hidden", state.selectionMode === "box");
+  $("#segmentButton").classList.toggle("hidden", state.selectionMode === "box");
+  $("#pipelineLabel").textContent = state.selectionMode === "box"
+    ? "框选蒙版 → Image2 → 原位回填"
+    : "SAM3 → Image2 → 原位回填";
   $("#pointModeControls").classList.toggle("hidden", state.selectionMode !== "point");
   $("#selectionHint").textContent = state.selectionMode === "box"
     ? "在图片上按住鼠标拖拽，框出完整标题或需要修改的区域。"
@@ -379,6 +396,10 @@ $("#stageCanvas").addEventListener("click", event => {
 
 $("#stageCanvas").addEventListener("pointerdown", event => {
   if (!state.project || !state.canvasImage || state.selectionMode !== "box") return;
+  state.activeMask = null;
+  state.targetMask = null;
+  state.protectedMasks = [];
+  $("#actionControls").classList.add("disabled");
   state.dragging = true;
   state.dragStart = canvasPoint(event);
   state.box = normalizedBox(state.dragStart, state.dragStart);
@@ -401,7 +422,9 @@ $("#stageCanvas").addEventListener("pointerup", event => {
   if (!valid) state.box = null;
   syncSegmentInputMode();
   drawPoints();
-  if (valid) toast("已框选修改区域；可以预览或直接生成");
+  renderProject();
+  persistLayerDraft();
+  if (valid) toast("框选范围已就绪；请填写生成要求");
 });
 
 $("#uploadButton").onclick = () => $("#fileInput").click();
@@ -461,8 +484,13 @@ $("#clearPoints").onclick = () => { state.points = []; syncSegmentInputMode(); d
 $("#clearSelection").onclick = () => {
   state.points = [];
   state.box = null;
+  state.activeMask = null;
+  state.targetMask = null;
+  state.protectedMasks = [];
   syncSegmentInputMode();
   drawPoints();
+  if (state.project) renderProject();
+  persistLayerDraft();
 };
 
 $$('[data-selection-mode]').forEach(button => button.onclick = () => {
@@ -471,33 +499,45 @@ $$('[data-selection-mode]').forEach(button => button.onclick = () => {
   state.selectionMode = button.dataset.selectionMode;
   state.points = [];
   state.box = null;
+  state.activeMask = null;
+  state.targetMask = null;
+  state.protectedMasks = [];
   // A rectangle is an anchor, not a hard final boundary.  Give title/text
   // selections a safer default envelope so a slightly under-drawn box still
   // leaves room for the replacement glyphs and cleanup of old edges.
   if (state.selectionMode === "box" && $("#growthMode")) $("#growthMode").value = "0.20";
   syncSegmentInputMode();
   drawPoints();
+  if (state.project) renderProject();
+  persistLayerDraft();
 });
 
-$("#segmentButton").onclick = async () => {
+async function createSelectionMask(showPreview = true) {
   const prompt = $("#segmentPrompt").value.trim();
   const boxes = state.box ? [state.box] : [];
-  if (!state.points.length && !boxes.length && !prompt) return toast("请先点一下目标、拖拽框选，或填写目标名称", true);
-  const button = $("#segmentButton"); button.disabled = true; button.textContent = "SAM3 正在理解目标…";
-  try {
-    const mask = await api(`/api/projects/${state.project.id}/segment`, {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({points: state.points, boxes, prompt, source_ref: state.sourceRef, selection_mode: state.selectionMode}),
-    });
-    state.activeMask = mask;
-    state.targetMask = mask;
-    state.protectedMasks = [];
-    state.project = await api(`/api/projects/${state.project.id}`);
+  if (!state.points.length && !boxes.length && !prompt) throw new Error("请先点一下目标、拖拽框选，或填写目标名称");
+  const mask = await api(`/api/projects/${state.project.id}/segment`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({points: state.points, boxes, prompt, source_ref: state.sourceRef, selection_mode: state.selectionMode}),
+  });
+  state.activeMask = mask;
+  state.targetMask = mask;
+  state.protectedMasks = [];
+  state.project = await api(`/api/projects/${state.project.id}`);
+  if (showPreview) {
     state.canvasImage = null;
     await showImage(mask.preview_url, "SAM3 蒙版预览");
-    $("#actionControls").classList.remove("disabled");
-    renderProject();
-    await persistLayerDraft();
+  }
+  $("#actionControls").classList.remove("disabled");
+  renderProject();
+  await persistLayerDraft();
+  return mask;
+}
+
+$("#segmentButton").onclick = async () => {
+  const button = $("#segmentButton"); button.disabled = true; button.textContent = "SAM3 正在理解目标…";
+  try {
+    await createSelectionMask(true);
     toast("SAM3 已按语义选中目标，可以直接生成");
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; button.textContent = state.selectionMode === "box" ? "使用框选范围并预览" : "识别并预览修改范围"; }
@@ -522,10 +562,24 @@ $("#feather").oninput = event => $("#featherOutput").textContent = `${event.targ
 $("#cleanupRadius").oninput = event => $("#cleanupRadiusOutput").textContent = `${event.target.value} px`;
 $("#semanticEdge").oninput = event => $("#semanticEdgeOutput").textContent = `${event.target.value} px`;
 $("#generateButton").onclick = async () => {
-  if (!state.targetMask) return toast("请先生成蒙版并设为修改目标", true);
   const prompt = $("#generationPrompt").value.trim();
   if (state.operation !== "remove" && !prompt) return toast("请写一句希望生成的内容", true);
+  if (!canGenerateFromSelection()) return toast(state.selectionMode === "box" ? "请先拖拽框选修改范围" : "请先识别并预览修改范围", true);
+  const button = $("#generateButton");
+  button.disabled = true;
+  let taskStarted = false;
   try {
+    if (!state.targetMask && state.selectionMode === "box" && state.box) {
+      $("#taskProgress").classList.remove("hidden");
+      $("#taskStage").textContent = "正在准备框选范围";
+      $("#taskPercent").textContent = "5%";
+      $("#progressBar").style.width = "5%";
+      $("#taskDetail").textContent = "正在自动创建局部修改蒙版，完成后会直接开始生成。";
+      await createSelectionMask(false);
+      $("#taskStage").textContent = "正在提交生成任务";
+      $("#taskPercent").textContent = "10%";
+      $("#progressBar").style.width = "10%";
+    }
     const task = await api(`/api/projects/${state.project.id}/generate`, {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
@@ -542,9 +596,15 @@ $("#generateButton").onclick = async () => {
         growth_ratio: Number($("#growthMode").value),
       }),
     });
+    taskStarted = true;
     startPolling(task.id);
-    toast("任务已启动；可以保留当前项目继续查看进度");
-  } catch (error) { toast(error.message, true); }
+    toast("修改范围已自动准备，正在生成局部修改");
+  } catch (error) {
+    $("#taskProgress").classList.add("hidden");
+    toast(error.message, true);
+  } finally {
+    if (!taskStarted) button.disabled = false;
+  }
 };
 
 async function startPolling(taskId) {
@@ -554,17 +614,23 @@ async function startPolling(taskId) {
     try {
       const task = await api(`/api/projects/${state.project.id}/tasks/${taskId}`);
       $("#taskStage").textContent = task.stage; $("#taskPercent").textContent = `${task.progress}%`; $("#progressBar").style.width = `${task.progress}%`;
+      $("#taskDetail").textContent = task.status === "completed"
+        ? "局部修改已完成，结果已自动设为当前底图。"
+        : task.status === "failed"
+          ? "任务未完成；输入、框选范围和中间文件均已保留。"
+          : "正在处理框选区域，完成后会自动展示结果。";
       if (["completed", "failed"].includes(task.status)) {
         clearInterval(state.polling); state.polling = null;
+        $("#generateButton").disabled = false;
         state.project = await api(`/api/projects/${state.project.id}`);
         renderProject(); loadProjects();
         if (task.status === "completed") {
           const version = state.project.versions.find(item => item.id === task.version_id);
           await selectSource(version.id, version.url);
-          toast("修改完成并已设为当前底图；现在可直接继续点选并运行 SAM3");
+          toast("修改完成并已设为当前底图；现在可继续框选下一处区域");
         } else { toast(`任务未完成：${friendlyError(task.error)}`, true); }
       }
-    } catch (error) { clearInterval(state.polling); toast(error.message, true); }
+    } catch (error) { clearInterval(state.polling); $("#generateButton").disabled = false; toast(error.message, true); }
   };
   await poll(); state.polling = setInterval(poll, 2500);
 }

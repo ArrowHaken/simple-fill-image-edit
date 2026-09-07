@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CatsCo图片素材工作台</title>
-  <link rel="stylesheet" href="static/styles.css?v=14">
+  <link rel="stylesheet" href="static/styles.css?v=16">
   <link rel="stylesheet" href="assets/catsco-standard-footer.css">
 </head>
 <body>
@@ -31,9 +31,9 @@
       </section>
 
       <section class="section disabled" id="editControls">
-        <div class="section-head"><h2>1 · 告诉我修改什么</h2><button class="text-button hidden" id="clearPoints">清空点</button></div>
-        <p class="hint">普通物体可输入名称；广告标题、文字或难识别区域，推荐直接拖拽框选。</p>
-        <label class="field"><span>原图中的对象或文字</span><input id="segmentPrompt" maxlength="64" placeholder="例如：书、人物手中的眼镜、全屋网速起飞"></label>
+        <div class="section-head"><h2>1 · 框选修改范围</h2><button class="text-button hidden" id="clearPoints">清空点</button></div>
+        <p class="hint">直接拖拽框选需要修改的区域；需要语义定位时可切换为点选目标。</p>
+        <label class="field hidden" id="segmentPromptField"><span>原图中的对象或文字</span><input id="segmentPrompt" maxlength="64" placeholder="例如：书、人物手中的眼镜、全屋网速起飞"></label>
         <div class="mode-switch selection-mode" aria-label="选区模式">
           <button type="button" data-selection-mode="point">点选目标</button>
           <button type="button" data-selection-mode="box" class="active">拖拽框选</button>
@@ -44,8 +44,8 @@
         </div>
         <p class="hint" id="selectionHint">在图片上按住鼠标拖拽，框出完整标题或需要修改的区域。</p>
         <button class="text-button hidden" id="clearSelection" type="button">清空选区</button>
-        <button class="secondary full" id="segmentButton">使用框选范围并预览</button>
-        <div class="mask-summary" id="maskSummary"><span>尚未生成蒙版</span></div>
+        <button class="secondary full hidden" id="segmentButton">识别并预览修改范围</button>
+        <div class="mask-summary" id="maskSummary"><span>请先在图片上拖拽框选</span></div>
         <div class="mask-role hidden" id="maskRoleControls">
           <button class="role-target" id="setTargetMask">设为修改目标</button>
           <button id="addProtectMask">加入前景保护</button>
@@ -54,7 +54,7 @@
       </section>
 
       <section class="section disabled" id="actionControls">
-        <div class="section-head"><h2>2 · 想把它变成什么</h2></div>
+        <div class="section-head"><h2>2 · 描述并生成</h2></div>
         <div class="action-grid">
           <button class="action active" data-operation="fill"><span>✦</span><b>语义局部重绘</b><small>Image2 一次完成替换</small></button>
         </div>
@@ -71,7 +71,7 @@
           <button class="text-button protect-clear hidden" id="clearProtection" type="button">清空全部前景保护</button>
           <p>“自动”会按旧对象大小额外留出生成空间；Image2 一次完成清除和生成，范围外保持原图。</p>
         </details>
-        <div class="v2-contract"><i></i><span>独立实验链路</span><b>SAM3 → Image2 → 原位回填</b></div>
+        <div class="v2-contract"><i></i><span>独立实验链路</span><b id="pipelineLabel">框选蒙版 → Image2 → 原位回填</b></div>
         <button class="primary full" id="generateButton"><span>生成局部修改</span><small id="generateProvider">Image2 · 原生 mask</small></button>
       </section>
     </aside>
@@ -140,6 +140,6 @@
       </div>
     </div>
   </footer>
-  <script src="static/app.js?v=14"></script>
+  <script src="static/app.js?v=16"></script>
 </body>
 </html>
