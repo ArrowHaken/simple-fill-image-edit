@@ -1,699 +1,261 @@
-const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => [...document.querySelectorAll(selector)];
-const API_PREFIX = location.pathname.startsWith("/catsco-image-edit/")
-  ? "/catsco-image-edit"
-  : location.pathname.startsWith("/artifacts/")
-    ? "/catsco-image-edit-api"
-    : "";
-
-const state = {
-  project: null,
-  sourceRef: "source",
-  activeImageUrl: null,
-  activeVersionId: null,
-  activeMask: null,
-  targetMask: null,
-  protectedMasks: [],
-  points: [],
-  box: null,
-  selectionMode: "box",
-  dragStart: null,
-  dragging: false,
-  pointLabel: 1,
-  operation: "fill",
-  canvasImage: null,
-  zoom: 1,
-  fitZoom: 1,
-  compareMode: false,
-  libraryCollapsed: false,
-  polling: null,
-  health: null,
-};
-
-async function api(url, options = {}) {
-  const response = await fetch(`${API_PREFIX}${url}`, options);
-  const body = response.headers.get("content-type")?.includes("json") ? await response.json() : await response.text();
-  if (!response.ok) throw new Error(body.detail || body || `HTTP ${response.status}`);
-  return body;
+import {drawSelection} from './selection-renderer.js?v=34';
+import {setupRangePicker} from './range-picker.js?v=23';
+import {api, post, media, escapeHtml as esc} from './api.js';
+import {DraftStore} from './draft-store.js?v=28';
+import {TaskController, isTerminal} from './task-controller.js?v=28';
+const $ = selector => document.querySelector(selector);
+const $$ = selector => [...document.querySelectorAll(selector)];
+const syncRangePicker = setupRangePicker();
+const show = (id, visible) => $(id).classList.toggle('hidden', !visible);
+const state = {project:null, source:'source', draft:null, image:null, overlay:null, preview:null, previewPending:false, capabilities:null,
+  epoch:0, selectionSeq:0, previewSeq:0, selecting:false, submitting:false, uploading:false, opening:false,
+  mode:'single', overlayVisible:true, zoom:1, fitted:true, pointLabel:1, projects:[], tasks:new Map(), drawerTab:'projects'};
+let previewTimer, toastTimer, drag=null, promptUndo=null;
+function saveStatus(text){$('#saveStatus').textContent=text;$('#saveStatus').classList.toggle('sr-only',text==='已保存');}
+const draftStore = new DraftStore((key,text) => {if(state.project && key === draftStore.key(state.project.id,state.source)) saveStatus(text);});
+const context = () => ({epoch:state.epoch,pid:state.project?.id,source:state.source});
+const current = ctx => ctx.epoch===state.epoch && ctx.pid===state.project?.id && ctx.source===state.source;
+function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),4200);}
+function errorAt(id,text=''){ $(id).textContent=text;show(id,!!text); }
+function defaults(source){return {source_ref:source,target_mask_id:null,protected_mask_ids:[],prompt:'',segment_prompt:'',selection_mode:'box',points:[],box:null,growth_ratio:.08,revision:0};}
+function saveDraft(){if(state.project&&state.draft) draftStore.update(state.project.id,state.source,state.draft);}
+function imageAt(url){return new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>reject(new Error('图片加载失败，请重试打开该项目。'));image.src=media(url);});}
+function sourceUrl(ref=state.source){return ref==='source'?state.project.source_url:state.project.versions.find(v=>v.id===ref)?.url;}
+function versionName(ref){if(ref==='source')return '原始素材';const i=state.project.versions.findIndex(v=>v.id===ref);return `版本 ${state.project.versions[i]?.number||state.project.versions.length-i}`;}
+function payload(){return {operation:'fill',mask_id:state.draft.target_mask_id,prompt:state.draft.prompt.trim(),dilation:6,feather:3,protected_mask_ids:[],result_object_prompt:'',pipeline_mode:'simple_fill',cleanup_radius:10,semantic_edge:6,growth_ratio:Number(state.draft.growth_ratio),source_ref:state.source};}
+function matchingTask(){const d=state.draft;return d&&state.project?.tasks.find(t=>!isTerminal(t)&&t.mask_id===d.target_mask_id&&t.prompt===d.prompt.trim()&&Number(t.growth_ratio)===Number(d.growth_ratio));}
+function ready(){return !!(state.project&&state.image&&!state.opening&&state.draft?.target_mask_id&&state.preview&&!state.previewPending&&!state.selecting&&!state.submitting&&!matchingTask()&&state.capabilities?.generation&&state.draft.prompt.trim());}
+function renderControls(){
+ const d=state.draft,p=state.project;
+ $('#deleteProject').disabled=!p||state.opening||state.submitting||state.selecting;
+ show('#deleteProject',!!p);
+ $('#generateButton').disabled=!ready();$('#segmentButton').disabled=state.selecting||!state.capabilities?.semantic_selection||state.opening;
+ $('#generateButton').innerHTML=state.submitting?'正在提交…':matchingTask()?'相同修改正在生成…':'生成修改 <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>';
+ const hasSelection=!!(state.image&&!state.opening&&(state.preview||d?.box||d?.points.length));
+ const selectionShown=hasSelection&&state.overlayVisible&&state.mode==='single';
+ $('#toggleOverlay').disabled=!hasSelection||state.mode==='compare';
+ $('#toggleOverlay').setAttribute('aria-pressed',String(selectionShown));
+ $('#toggleOverlay').textContent=selectionShown?'隐藏选区':'显示选区';
+ $('#toggleOverlay').title=selectionShown?'隐藏选区':'显示选区';
+ const canCompare=!!(p&&state.source!=='source');$('#compareButton').disabled=!canCompare;$('#compareButton').setAttribute('aria-pressed',String(state.mode==='compare'));
+ show('#compareButton',!!p?.versions.length);
+ $('#compareButton').textContent=state.mode==='compare'?'返回单图':'对比';
+ ['#zoomOut','#zoomIn','#fitCanvas'].forEach(id=>$(id).disabled=!state.image||state.mode==='compare');
+ $('#openEditor').disabled=!p;$('#exportCurrent').disabled=!p||state.opening||!state.image;$('#renameProject').disabled=!p;
+ show('#coordinateButton',!!p&&d?.selection_mode==='box');
+ if(!p) return;
+ renderPromptTools();
+ $$('[data-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.mode===d.selection_mode)));
+ show('#pointOptions',d.selection_mode==='point');show('#targetField',d.selection_mode==='text');show('#segmentButton',d.selection_mode!=='box');
+ show('#selectionHint',d.selection_mode!=='box');
+ $('#selectionHint').textContent=d.selection_mode==='box'?'':!state.capabilities?.semantic_selection?'智能选区尚未配置，可切换为框选。':d.selection_mode==='point'?'点击对象添加目标点；按住 Shift 可排除误选。':'输入一个对象名称，再点击识别对象。';
+ $('#segmentButton').textContent=state.selecting?'正在识别…':'识别对象';
+ $('#maskSummary').classList.toggle('ready',!!state.preview);
+ $('#maskSummary').textContent=state.selecting?'正在更新选区…':state.preview?'已选择':d.target_mask_id?'正在确认选区…':d.box||d.points.length?'选区待确认':'尚未选择区域';
+ $('#generationAvailability').textContent=!state.capabilities?.generation?'生成服务未配置':state.submitting?'正在提交…':matchingTask()?'相同修改正在生成':!d.target_mask_id?'请选择修改区域':!d.prompt.trim()?'请填写修改要求':state.previewPending||!state.preview?'正在更新范围…':'';
+ show('#generationAvailability',!!$('#generationAvailability').textContent);
 }
-
-function toast(message, error = false) {
-  const node = $("#toast");
-  node.textContent = message;
-  node.className = `toast show${error ? " error" : ""}`;
-  clearTimeout(node._timer);
-  node._timer = setTimeout(() => node.className = "toast", 2800);
+function restoreInputs(){const d=state.draft;$('#generationPrompt').value=d.prompt;$('#segmentPrompt').value=d.segment_prompt;const option=[...$('#growthMode').options].find(o=>Number(o.value)===Number(d.growth_ratio));$('#growthMode').value=option?.value||'0.08';if(!option)d.growth_ratio=.08;syncRangePicker();}
+async function openProject(pid, requestedSource){
+ const epoch=++state.epoch;state.opening=true;state.selectionSeq++;state.previewSeq++;clearTimeout(previewTimer);drag=null;promptUndo=null;state.previewPending=false;
+ await draftStore.flushAll(); if(epoch!==state.epoch)return;
+ $('#editFields').inert=true;show('#imageLoading',true);renderControls();
+ try {
+  const project=await api(`/api/projects/${pid}`);if(epoch!==state.epoch)return;
+  state.project=project;state.source=requestedSource||project.active_source_ref||'source';
+  if(state.source!=='source'&&!project.versions.some(v=>v.id===state.source))state.source='source';
+  const remote=project.edit_drafts?.[state.source]||(project.edit_draft?.source_ref===state.source?project.edit_draft:null);
+  state.draft=draftStore.restore(pid,state.source,{...defaults(state.source),...remote});
+  if(state.draft.target_mask_id&&!project.masks.some(m=>m.id===state.draft.target_mask_id&&m.source_ref===state.source))state.draft.target_mask_id=null;
+  state.preview=null;state.overlay=null;state.image=null;state.selecting=false;state.mode='single';state.overlayVisible=true;state.fitted=true;
+  show('#compareView',false);show('#emptyState',false);show('#stageCanvas',false);show('#editorIntro',false);show('#editFields',true);show('#filmstrip',true);
+  show('#alphaNotice',!!project.has_alpha);restoreInputs();$('#renameProject').textContent=project.name;saveStatus(draftStore.entries.get(draftStore.key(pid,state.source))?.dirty?'本机草稿待同步':'已保存');
+  ['#selectionError','#promptError','#generationError'].forEach(id=>errorAt(id));
+  for(const task of project.tasks){state.tasks.set(`${pid}:${task.id}`,task);monitor.watch(pid,task);}
+  renderVersions();renderTasks();syncProgress();
+  const ctx=context(),image=await imageAt(sourceUrl());if(!current(ctx))return;
+  state.image=image;$('#stageCanvas').width=image.naturalWidth;$('#stageCanvas').height=image.naturalHeight;
+  $('#sourceLabel').textContent=versionName(state.source);$('#imageSize').textContent=`${image.naturalWidth} × ${image.naturalHeight}`;
+  show('#stageCanvas',true);draw();fitCanvas();
+  const url=new URL(location.href);url.searchParams.set('project',pid);url.searchParams.set('version',state.source);history.replaceState(null,'',url);
+  try{localStorage.setItem('catsco-v15:lastProject',JSON.stringify({pid,source:state.source}));}catch{}
+  if(state.draft.target_mask_id) await refreshPreview();
+  else if(state.draft.box&&state.draft.selection_mode==='box') await resolveSelection();
+  draftStore.flush(draftStore.key(pid,state.source));
+ }catch(error){toast(error.message);errorAt('#generationError',error.message);}
+ finally{if(epoch===state.epoch){state.opening=false;$('#editFields').inert=false;show('#imageLoading',false);renderControls();}}
 }
-
-function prefixedUrl(url) {
-  if (!url || !API_PREFIX || !url.startsWith("/") || url.startsWith(API_PREFIX)) return url;
-  return `${API_PREFIX}${url}`;
+function draw(){
+ if(!state.image)return;const canvas=$('#stageCanvas'),ctx=canvas.getContext('2d');
+ ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(state.image,0,0);
+ drawSelection(ctx,{draft:state.draft,preview:state.preview,visible:state.overlayVisible,zoom:state.zoom});
 }
-// All media paths are immutable (project sources, masks and version IDs are
-// generated once).  Avoiding a timestamp query lets the browser reuse the
-// same thumbnails and prevents a project refresh from downloading every
-// image again.
-function mediaUrl(url) { return prefixedUrl(url); }
-
-async function checkHealth() {
-  try {
-    const health = await api("/api/health");
-    state.health = health;
-    const items = [
-      [health.simple_semantic_fill, "语义 Fill Anything"],
-      [health.wavespeed_key_ready, "SAM3 · WaveSpeed"],
-      [health.image2_native_mask_ready || health.image2_ssh_key_ready,
-        health.image2_native_mask_ready
-          ? (health.image2_native_mask_route === "catsco-gateway" ? "Image2 · CatsCo 原生蒙版" : "Image2 · 原生蒙版")
-          : "Image2 · 参考图兼容"],
-    ];
-    $("#healthBadges").innerHTML = items.map(([ok, text]) => `<span class="badge ${ok ? "" : "warn"}"><i></i>${text}</span>`).join("");
-  } catch (error) {
-    $("#healthBadges").innerHTML = `<span class="badge warn"><i></i>后端未连接</span>`;
+function applyZoom(value,fitted=false){if(!state.image)return;state.zoom=Math.max(.01,Math.min(8,value));state.fitted=fitted;const c=$('#stageCanvas');c.style.width=`${Math.round(state.image.naturalWidth*state.zoom)}px`;c.style.height=`${Math.round(state.image.naturalHeight*state.zoom)}px`;$('#fitCanvas').textContent=fitted?'适合':`${Math.round(state.zoom*100)}%`;draw();}
+function fitCanvas(){if(!state.image||state.mode==='compare')return;const s=$('#stage');applyZoom(Math.min(1,Math.max(1,s.clientWidth-36)/state.image.naturalWidth,Math.max(1,s.clientHeight-36)/state.image.naturalHeight),true);}
+new ResizeObserver(()=>{if(state.fitted)fitCanvas();}).observe($('#stage'));
+function invalidateSelection(){state.overlayVisible=true;state.selectionSeq++;state.previewSeq++;state.previewPending=false;state.selecting=false;state.draft.target_mask_id=null;state.preview=null;state.overlay=null;clearTimeout(previewTimer);errorAt('#selectionError');errorAt('#generationError');saveDraft();renderControls();draw();}
+function schedulePreview(){state.previewSeq++;state.previewPending=!!state.draft?.target_mask_id;clearTimeout(previewTimer);renderControls();if(state.draft?.target_mask_id)previewTimer=setTimeout(refreshPreview,350);}
+async function refreshPreview(){
+ if(!state.draft?.target_mask_id)return;
+ const ctx=context(),seq=++state.previewSeq;state.previewPending=true;renderControls();
+ try{const value=await post(`/api/projects/${ctx.pid}/edit-preview`,payload());if(!current(ctx)||seq!==state.previewSeq)return;state.preview=value;state.previewPending=false;errorAt('#selectionError');draw();}
+ catch(error){if(current(ctx)&&seq===state.previewSeq){state.preview=null;state.previewPending=false;errorAt('#selectionError',error.message);draw();}}
+ finally{if(current(ctx)&&seq===state.previewSeq)renderControls();}
+}
+async function resolveSelection(){
+ if(!state.project||!state.draft)return;const d=state.draft;
+ if(d.selection_mode==='box'&&!d.box)return;
+ if(d.selection_mode!=='box'&&!state.capabilities?.semantic_selection){errorAt('#selectionError','智能选区尚未配置，请使用框选。');return;}
+ if(d.selection_mode==='point'&&!d.points.length){errorAt('#selectionError','请先点击图片中的对象。');return;}
+ if(d.selection_mode==='text'&&!d.segment_prompt.trim()){errorAt('#selectionError','请输入要选择的对象名称。');$('#segmentPrompt').focus();return;}
+ const ctx=context(),seq=++state.selectionSeq;state.selecting=true;renderControls();
+ const body={points:d.selection_mode==='point'?structuredClone(d.points):[],boxes:d.selection_mode==='box'?[structuredClone(d.box)]:[],prompt:d.selection_mode==='text'?d.segment_prompt.trim():'',source_ref:state.source,selection_mode:d.selection_mode==='box'?'box':'point'};
+ try{const mask=await post(`/api/projects/${ctx.pid}/segment`,body);if(!current(ctx)||seq!==state.selectionSeq)return;state.draft.target_mask_id=mask.id;state.project.masks.unshift(mask);saveDraft();await refreshPreview();}
+ catch(error){if(current(ctx)&&seq===state.selectionSeq)errorAt('#selectionError',error.message);}
+ finally{if(current(ctx)&&seq===state.selectionSeq){state.selecting=false;renderControls();}}
+}
+function point(event){const c=$('#stageCanvas'),r=c.getBoundingClientRect();return{x:Math.max(0,Math.min(c.width-1,Math.round((event.clientX-r.left)*c.width/r.width))),y:Math.max(0,Math.min(c.height-1,Math.round((event.clientY-r.top)*c.height/r.height)))};}
+const boxBetween=(a,b)=>({x_min:Math.min(a.x,b.x),y_min:Math.min(a.y,b.y),x_max:Math.max(a.x,b.x),y_max:Math.max(a.y,b.y)});
+let spaceDown=false;
+$('#stageCanvas').addEventListener('pointerdown',event=>{
+ if(!state.image||state.opening||state.mode!=='single'||event.button!==0)return;
+ $('#stage').focus({preventScroll:true});
+ const s=$('#stage');
+ if(spaceDown){drag={pan:true,x:event.clientX,y:event.clientY,left:s.scrollLeft,top:s.scrollTop};event.currentTarget.setPointerCapture(event.pointerId);return;}
+ if(state.draft.selection_mode==='text')return;
+ if(state.draft.selection_mode==='point'){invalidateSelection();state.draft.points.push({...point(event),label:event.shiftKey?0:state.pointLabel});saveDraft();draw();renderControls();return;}
+ invalidateSelection();drag={start:point(event)};state.draft.box=boxBetween(drag.start,drag.start);event.currentTarget.setPointerCapture(event.pointerId);draw();
+});
+$('#stageCanvas').addEventListener('pointermove',event=>{if(!drag)return;if(drag.pan){$('#stage').scrollLeft=drag.left-(event.clientX-drag.x);$('#stage').scrollTop=drag.top-(event.clientY-drag.y);return;}state.draft.box=boxBetween(drag.start,point(event));draw();});
+$('#stageCanvas').addEventListener('pointerup',event=>{if(!drag)return;if(drag.pan){drag=null;return;}state.draft.box=boxBetween(drag.start,point(event));drag=null;const b=state.draft.box;if(b.x_max-b.x_min<4||b.y_max-b.y_min<4)state.draft.box=null;saveDraft();draw();resolveSelection();});
+function cancelDrag(){if(drag&&!drag.pan){state.draft.box=null;invalidateSelection();}drag=null;}
+$('#stageCanvas').addEventListener('pointercancel',cancelDrag);$('#stageCanvas').addEventListener('lostpointercapture',()=>{if(drag)cancelDrag();});
+window.addEventListener('keydown',event=>{if(/INPUT|TEXTAREA|SELECT/.test(event.target.tagName))return;if(event.code==='Space'&&document.activeElement===$('#stage')){spaceDown=true;event.preventDefault();}if(event.key==='Escape'){cancelDrag();$('#workspace').classList.remove('editor-open');}});
+window.addEventListener('keyup',event=>{if(event.code==='Space')spaceDown=false;});window.addEventListener('blur',()=>{spaceDown=false;cancelDrag();});
+$$('[data-mode]').forEach(button=>button.onclick=()=>{if(!state.draft)return;state.draft.selection_mode=button.dataset.mode;state.draft.box=null;state.draft.points=[];invalidateSelection();});
+$$('[data-point]').forEach(button=>button.onclick=()=>{state.pointLabel=Number(button.dataset.point);$$('[data-point]').forEach(item=>item.setAttribute('aria-pressed',String(item===button)));});
+$('#segmentButton').onclick=resolveSelection;
+$('#segmentPrompt').oninput=event=>{state.draft.segment_prompt=event.target.value;invalidateSelection();};
+$('#generationPrompt').oninput=event=>{promptUndo=null;state.draft.prompt=event.target.value;errorAt('#promptError');errorAt('#generationError');saveDraft();schedulePreview();};
+$('#growthMode').onchange=event=>{state.draft.growth_ratio=Number(event.target.value);saveDraft();schedulePreview();};
+const examples={'替换对象':'把选中对象替换成白色陶瓷杯，保持其他内容不变。','移除内容':'把选中对象去掉','修改文字':'将选中的文字改为“秋季上新”，保持原有排版和字体风格。'};
+function renderPromptTools(){
+ $$('[data-example]').forEach(button=>button.setAttribute('aria-pressed',String(state.draft?.prompt===examples[button.dataset.example])));
+ show('#undoPrompt',!!promptUndo&&current(promptUndo.ctx));
+}
+function setPrompt(text){state.draft.prompt=text;$('#generationPrompt').value=text;errorAt('#promptError');errorAt('#generationError');saveDraft();schedulePreview();$('#generationPrompt').focus({preventScroll:true});}
+$$('[data-example]').forEach(button=>button.onclick=()=>{
+ if(!state.draft||state.opening)return;
+ const text=examples[button.dataset.example],input=$('#generationPrompt');
+ if(state.draft.prompt!==text){promptUndo={ctx:context(),text:state.draft.prompt,start:input.selectionStart,end:input.selectionEnd};setPrompt(text);}
+ const editable=button.dataset.example==='替换对象'?'白色陶瓷杯':button.dataset.example==='修改文字'?'秋季上新':null;
+ input.focus({preventScroll:true});const start=editable?text.indexOf(editable):text.length;input.setSelectionRange(start,editable?start+editable.length:start);
+});
+$('#undoPrompt').onclick=()=>{if(!promptUndo||!current(promptUndo.ctx))return;const previous=promptUndo;promptUndo=null;setPrompt(previous.text);$('#generationPrompt').setSelectionRange(previous.start,previous.end);};
+async function upload(file){
+ if(!file||state.uploading)return;if(!['image/png','image/jpeg','image/webp'].includes(file.type)){toast('请选择PNG、JPG或WEBP图片。');return;}if(file.size>200*1024*1024){toast('图片超过200 MiB，请先缩小文件。');return;}
+ state.uploading=true;['#uploadButton','#sideUpload','#newProject'].forEach(id=>$(id).disabled=true);show('#imageLoading',true);$('#imageLoading').textContent='正在上传并保存原文件…';
+ try{const body=new FormData();body.append('image',file);body.append('name',file.name.replace(/\.[^.]+$/,''));const project=await api('/api/projects',{method:'POST',body});await openProject(project.id);await loadProjects();toast(project.has_alpha?'透明原文件已保存，编辑使用白底副本。':'图片已保存');}
+ catch(error){toast(error.message);errorAt('#generationError',error.message);}
+ finally{state.uploading=false;['#uploadButton','#sideUpload','#newProject'].forEach(id=>$(id).disabled=false);show('#imageLoading',false);$('#imageLoading').textContent='正在载入图片…';$('#fileInput').value='';}
+}
+['#uploadButton','#sideUpload','#newProject'].forEach(id=>$(id).onclick=()=>$('#fileInput').click());$('#fileInput').onchange=event=>upload(event.target.files[0]);
+$('#stage').addEventListener('dragover',event=>{event.preventDefault();$('#stage').classList.add('drag-over');});$('#stage').addEventListener('dragleave',()=>$('#stage').classList.remove('drag-over'));$('#stage').addEventListener('drop',event=>{event.preventDefault();$('#stage').classList.remove('drag-over');upload(event.dataTransfer.files[0]);});
+$('#openEditor').onclick=()=>{$('#workspace').classList.add('editor-open');$('#closeEditor').focus();};$('#closeEditor').onclick=()=>{$('#workspace').classList.remove('editor-open');$('#stage').focus();};
+$('#toggleOverlay').onclick=()=>{state.overlayVisible=!state.overlayVisible;draw();renderControls();};
+$('#zoomIn').onclick=()=>applyZoom(state.zoom*1.25);$('#zoomOut').onclick=()=>applyZoom(state.zoom/1.25);$('#fitCanvas').onclick=fitCanvas;
+$('#compareButton').onclick=()=>{if(state.mode==='compare'){state.mode='single';show('#compareView',false);show('#stageCanvas',true);}else{const v=state.project.versions.find(v=>v.id===state.source);if(!v)return;state.mode='compare';$('#compareOriginal').src=media(v.base_url||sourceUrl(v.source_ref||'source'));$('#compareResult').src=media(v.url);show('#compareView',true);show('#stageCanvas',false);}renderControls();};
+const trashIcon = '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></svg>';
+function renderVersions(){
+ if(!state.project)return;const p=state.project;$('#versionCount').textContent=`${p.versions.length} 个结果`;
+ const items=[{id:'source',url:p.source_url},...p.versions.slice().reverse()];
+ $('#versionList').innerHTML=items.map(v=>`<div class="version-item"><button class="version-card" data-version="${esc(v.id)}" aria-current="${v.id===state.source}"><img src="${esc(media(v.url))}" width="56" height="48" alt="" loading="lazy"><span>${esc(versionName(v.id))}<small>${v.id==='source'?'原图':esc((v.prompt||'局部修改').slice(0,20))}</small></span></button><button class="version-delete delete-icon" data-delete-version="${esc(v.id)}" aria-label="${v.id==='source'?'删除素材及全部版本':`删除${esc(versionName(v.id))}`}" title="${v.id==='source'?'删除素材及全部版本':'删除此版本'}">${trashIcon}</button></div>`).join('');
+ $$('[data-version]').forEach(button=>button.onclick=()=>openProject(p.id,button.dataset.version));
+ $$('[data-delete-version]').forEach(button=>button.onclick=()=>requestDelete(button.dataset.deleteVersion));
+}
+let deletion = null, deleting = false;
+function requestDelete(ref='source'){
+ if(!state.project||state.opening||state.selecting||state.submitting)return;
+ deletion={ctx:context(),ref};
+ $('#deleteTitle').textContent=ref==='source'?'删除这份素材？':'删除这个版本？';
+ $('#deleteThumbnail').src=media(sourceUrl(ref));
+ $('#deleteName').textContent=state.project.name;
+ $('#deleteMeta').textContent=ref==='source'?`${state.project.versions.length} 个结果 · ${state.project.tasks.length} 条任务记录`:versionName(ref);
+ $('#deleteDescription').textContent=ref==='source'?'素材及其全部版本、任务记录将从工作台移除。':`仅移除此版本，其他结果保留。${state.source===ref?'画布将返回原图。':''}`;
+ $('#deleteNote').textContent=ref==='source'?'本机素材文件会保留。':'后续版本对比所需的底图会保留。';
+ $('#confirmDelete').textContent=ref==='source'?'删除素材':'删除版本';
+ errorAt('#deleteError');$('#deleteDialog').showModal();$('#cancelDelete').focus();
+}
+$('#deleteProject').onclick=()=>requestDelete();
+$('#deleteDialog').addEventListener('cancel',event=>{if(deleting)event.preventDefault();});
+function clearProject(){
+ state.epoch++;state.selectionSeq++;state.previewSeq++;clearTimeout(previewTimer);drag=null;promptUndo=null;
+ Object.assign(state,{project:null,draft:null,image:null,overlay:null,preview:null,previewPending:false,opening:false,selecting:false,mode:'single',source:'source'});
+ ['#stageCanvas','#compareView','#editFields','#filmstrip','#taskProgress','#imageLoading','#alphaNotice'].forEach(id=>show(id,false));
+ show('#emptyState',true);show('#editorIntro',true);$('#workspace').classList.remove('editor-open');
+ $('#renameProject').textContent='图片预览';$('#sourceLabel').textContent='画布';$('#imageSize').textContent='';$('#versionList').replaceChildren();
+ $('#generationPrompt').value='';$('#segmentPrompt').value='';$('#rangeSettings').open=false;
+ ['#selectionError','#promptError','#generationError'].forEach(id=>errorAt(id));saveStatus('已保存');
+ $('#generationAvailability').textContent='上传图片后开始编辑';show('#generationAvailability',true);
+ const url=new URL(location.href);url.searchParams.delete('project');url.searchParams.delete('version');history.replaceState(null,'',url);
+ try{localStorage.removeItem('catsco-v15:lastProject');}catch{}
+ renderControls();renderTasks();syncProgress();
+}
+$('#confirmDelete').onclick=async()=>{
+ if(deleting||!deletion||!current(deletion.ctx))return;
+ const {ctx,ref}=deletion;deleting=true;$('#confirmDelete').disabled=true;$('#cancelDelete').disabled=true;$('#confirmDelete').textContent='正在删除…';
+ try{
+  await draftStore.flushAll();
+  const result=await api(`/api/projects/${ctx.pid}${ref==='source'?'':`/versions/${ref}`}`,{method:'DELETE'});
+  draftStore.forget(ctx.pid,ref==='source'?undefined:ref);
+  if(ref==='source'){
+   monitor.stopProject(ctx.pid);for(const key of state.tasks.keys())if(key.startsWith(`${ctx.pid}:`))state.tasks.delete(key);
+   if(current(ctx))clearProject();
+  }else if(current(ctx)){
+   if(state.source===ref)await openProject(ctx.pid,'source');
+   else{state.project=result;renderVersions();renderTasks();renderControls();}
   }
-}
-
-async function loadProjects() {
-  const projects = await api("/api/projects");
-  const query = $("#projectSearch").value.trim().toLowerCase();
-  const shown = projects.filter(item => item.name.toLowerCase().includes(query));
-  $("#projectList").innerHTML = shown.length ? shown.map(item => `
-    <article class="project-card ${state.project?.id === item.id ? "active" : ""}" data-project="${item.id}">
-      <img src="${mediaUrl(item.thumbnail_url)}" alt=""><div><strong>${escapeHtml(item.name)}</strong>
-      <small>${item.width}×${item.height} · ${item.versions} 个结果</small></div>
-    </article>`).join("") : `<p class="quiet">还没有保存的项目。</p>`;
-  $$("[data-project]").forEach(card => card.onclick = () => openProject(card.dataset.project));
-}
-
-async function openProject(projectId) {
-  state.project = await api(`/api/projects/${projectId}`);
-  state.sourceRef = "source";
-  state.activeVersionId = null;
-  const draft = state.project.edit_draft?.source_ref === "source" ? state.project.edit_draft : null;
-  const rememberedCandidate = state.project.masks.find(item => item.id === (draft?.target_mask_id || state.project.active_mask_id) && (item.source_ref || "source") === "source") || null;
-  const remembered = state.selectionMode === "box"
-    ? (rememberedCandidate?.boxes?.length ? rememberedCandidate : null)
-    : ((rememberedCandidate?.points?.length || rememberedCandidate?.prompt) ? rememberedCandidate : null);
-  state.activeMask = remembered;
-  state.targetMask = remembered;
-  state.protectedMasks = [];
-  state.points = state.selectionMode === "point" ? (remembered?.points || []) : [];
-  state.box = state.selectionMode === "box" ? (remembered?.boxes?.[0] || null) : null;
-  syncSegmentInputMode();
-  $("#projectTitle").textContent = state.project.name;
-  $("#editControls").classList.remove("disabled");
-  $("#actionControls").classList.toggle("disabled", !canGenerateFromSelection());
-  await showImage(state.project.source_url, "原始素材");
-  renderProject();
-}
-
-function renderProject() {
-  const p = state.project;
-  if (!p) return;
-  $("#actionControls").classList.toggle("disabled", !canGenerateFromSelection());
-  // Do not reserve a whole grid row for an empty version history.  The stage
-  // gets that space back until the first result is actually available.
-  $(".stage-column").classList.toggle("has-versions", p.versions.length > 0);
-  $("#filmstrip").classList.toggle("hidden", p.versions.length === 0);
-  $("#compareButton").disabled = p.versions.length === 0;
-  $("#compareButton").textContent = state.compareMode ? "返回单图" : "原图对比";
-  syncZoomControls();
-  $("#versionCount").textContent = `${p.versions.length} 个结果`;
-  const cards = [`<article class="version-card source-card ${state.sourceRef === "source" ? "active" : ""}" data-source-ref="source"><img src="${mediaUrl(p.source_url)}"><span>原始素材</span></article>`];
-  p.versions.forEach(version => cards.push(`<article class="version-card ${state.sourceRef === version.id ? "active" : ""}" data-source-ref="${version.id}" data-url="${version.url}"><img src="${mediaUrl(version.url)}"><span>${operationName(version.operation)} · ${shortId(version.id)}</span></article>`));
-  $("#versionList").innerHTML = cards.join("");
-  $$("[data-source-ref]").forEach(card => card.onclick = () => selectSource(card.dataset.sourceRef, card.dataset.url));
-
-  $("#taskList").innerHTML = p.tasks.length ? p.tasks.map(taskCard).join("") : `<p class="quiet">还没有任务记录。</p>`;
-  $$("[data-retry]").forEach(button => button.onclick = () => retryTask(button.dataset.retry));
-  $$("[data-resume]").forEach(button => button.onclick = () => resumeTask(button.dataset.resume));
-  if (state.activeMask) {
-    $("#maskSummary").className = "mask-summary ready";
-    $("#maskSummary").textContent = state.selectionMode === "box"
-      ? `框选锚点已就绪 · 生成时自动外扩 · 当前覆盖 ${(state.activeMask.coverage * 100).toFixed(1)}%`
-      : `蒙版已就绪 · 覆盖画面 ${(state.activeMask.coverage * 100).toFixed(1)}%`;
-  } else if (state.selectionMode === "box" && state.box) {
-    $("#maskSummary").className = "mask-summary ready";
-    $("#maskSummary").textContent = "框选范围已就绪；填写生成要求后即可生成";
-  } else {
-    $("#maskSummary").className = "mask-summary";
-    $("#maskSummary").textContent = state.selectionMode === "box" ? "请先在图片上拖拽框选" : "尚未生成蒙版";
-  }
-  $("#maskRoleControls").classList.add("hidden");
-  const layers = [];
-  if (state.targetMask) layers.push(`修改目标：${escapeHtml(state.targetMask.prompt || shortId(state.targetMask.id))}`);
-  if (state.protectedMasks.length) layers.push(`前景保护：${state.protectedMasks.map(item => escapeHtml(item.prompt || shortId(item.id))).join("、")}`);
-  $("#layerSummary").classList.toggle("hidden", !layers.length);
-  $("#layerSummary").innerHTML = layers.join("<br>");
-  $("#clearProtection").classList.toggle("hidden", !state.protectedMasks.length);
-  const hasSelection = Boolean(state.targetMask || (state.selectionMode === "box" && state.box));
-  $("#occlusionSummary").classList.toggle("hidden", !hasSelection);
-  $("#occlusionSummary").innerHTML = state.targetMask
-    ? `将修改 <b>${escapeHtml(state.targetMask.prompt || "已选目标")}</b>${state.protectedMasks.length ? `，并保持 <b>${state.protectedMasks.map(item => escapeHtml(item.prompt || "前景对象")).join("、")}</b> 原像素` : "；当前没有前景保护"}`
-    : hasSelection ? "将修改 <b>框选区域</b>；生成时会自动准备蒙版" : "";
-}
-
-function canGenerateFromSelection() {
-  return Boolean(state.targetMask || (state.selectionMode === "box" && state.box));
-}
-
-function taskCard(task) {
-  const mediaBase = prefixedUrl(`/media/projects/${task.project_id}/tasks/${task.id}`);
-  const providerLink = task.artifacts?.provider_original ? `<a href="${mediaBase}/${task.artifacts.provider_original}" target="_blank">供应商原图</a>` : "";
-  const candidateLink = task.artifacts?.layered_candidate_full ? `<a href="${mediaBase}/${task.artifacts.layered_candidate_full}" target="_blank">分层候选</a>` : "";
-  const resultMaskLink = task.artifacts?.result_object_mask_preview ? `<a href="${mediaBase}/${task.artifacts.result_object_mask_preview}" target="_blank">新对象蒙版</a>` : "";
-  const cleanPlateLink = task.artifacts?.clean_plate ? `<a href="${mediaBase}/${task.artifacts.clean_plate}" target="_blank">干净底板</a>` : "";
-  const alphaLink = task.artifacts?.commit_alpha ? `<a href="${mediaBase}/${task.artifacts.commit_alpha}" target="_blank">软边 Alpha</a>` : "";
-  const qualityLink = task.artifacts?.quality_report ? `<a href="${mediaBase}/${task.artifacts.quality_report}" target="_blank">质量报告</a>` : "";
-  const resultLink = task.version_id ? `<a href="${prefixedUrl(`/api/projects/${task.project_id}/versions/${task.version_id}/download`)}">下载结果</a>` : "";
-  const resume = task.status === "failed" && task.provider === "image2" ? `<button class="primary-mini" data-resume="${task.id}">恢复已有结果</button>` : "";
-  const retry = ["failed", "completed"].includes(task.status) ? `<button data-retry="${task.id}">重新执行</button>` : "";
-  const detail = task.error ? friendlyError(task.error) : task.stage;
-  const pipeline = task.pipeline_mode === "simple_fill" ? "Simple Fill" : task.pipeline_mode === "object_v2" ? "V2" : "Legacy";
-  return `<article class="task-card"><header><b>${pipeline} · ${shortId(task.id)}</b><span class="status-${task.status}">${statusName(task.status)}</span></header><p>${escapeHtml(detail || "")}</p><footer>${resultLink}${cleanPlateLink}${candidateLink}${resultMaskLink}${alphaLink}${qualityLink}${providerLink}${resume}${retry}</footer></article>`;
-}
-
-async function selectSource(sourceRef, url) {
-  if (state.compareMode) hideComparison();
-  state.sourceRef = sourceRef;
-  state.activeVersionId = sourceRef === "source" ? null : sourceRef;
-  state.activeMask = null;
-  state.targetMask = null;
-  state.protectedMasks = [];
-  state.points = [];
-  state.box = null;
-  syncSegmentInputMode();
-  $("#actionControls").classList.add("disabled");
-  await showImage(url || state.project.source_url, sourceRef === "source" ? "原始素材" : `基于版本 ${shortId(sourceRef)} 继续`);
-  renderProject();
-  persistLayerDraft();
-}
-
-async function persistLayerDraft() {
-  if (!state.project) return;
-  try {
-    await api(`/api/projects/${state.project.id}/edit-draft`, {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        source_ref: state.sourceRef,
-        target_mask_id: state.targetMask?.id || null,
-        protected_mask_ids: state.protectedMasks.map(item => item.id),
-      }),
-    });
-  } catch (error) { toast(`编辑草稿保存失败：${error.message}`, true); }
-}
-
-async function showImage(url, label, resetMask = false) {
-  state.activeImageUrl = url;
-  const image = new Image();
-  image.onload = () => {
-    state.canvasImage = image;
-    const canvas = $("#stageCanvas");
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
-    canvas.getContext("2d").drawImage(image, 0, 0);
-    drawPoints();
-    canvas.classList.remove("hidden");
-    $("#emptyState").classList.add("hidden");
-    $("#sourceLabel").textContent = `${label} · ${image.naturalWidth}×${image.naturalHeight}`;
-    $("#showSource").disabled = false;
-    $("#fitCanvas").disabled = false;
-    $("#zoomOut").disabled = false;
-    $("#zoomValue").disabled = false;
-    $("#zoomIn").disabled = false;
-    $("#compareButton").disabled = !state.project?.versions?.length;
-    $("#downloadCurrent").classList.remove("disabled");
-    $("#downloadCurrent").href = prefixedUrl(url);
-    $("#downloadCurrent").setAttribute("download", "");
-    syncZoomControls();
-    requestAnimationFrame(() => fitCanvasToStage());
-  };
-  image.onerror = () => toast("图片加载失败", true);
-  image.src = mediaUrl(url);
-  if (resetMask) state.activeMask = null;
-}
-
-function drawPoints() {
-  if (!state.canvasImage) return;
-  const canvas = $("#stageCanvas");
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(state.canvasImage, 0, 0, canvas.width, canvas.height);
-  const radius = Math.max(7, Math.min(canvas.width, canvas.height) * .012);
-  state.points.forEach((point, index) => {
-    ctx.beginPath(); ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = point.label ? "#11c690" : "#ef5148"; ctx.fill();
-    ctx.lineWidth = Math.max(2, radius * .22); ctx.strokeStyle = "white"; ctx.stroke();
-    ctx.fillStyle = "white"; ctx.font = `bold ${radius}px sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(String(index + 1), point.x, point.y + 1);
-  });
-  if (state.box) {
-    const {x_min, y_min, x_max, y_max} = state.box;
-    ctx.save();
-    ctx.fillStyle = "rgba(8,125,101,.13)";
-    ctx.fillRect(x_min, y_min, x_max - x_min, y_max - y_min);
-    ctx.strokeStyle = "#087d65";
-    ctx.lineWidth = Math.max(3, Math.min(canvas.width, canvas.height) * .004);
-    ctx.setLineDash([10, 7]);
-    ctx.strokeRect(x_min, y_min, x_max - x_min, y_max - y_min);
-    ctx.restore();
-  }
-}
-
-function syncZoomControls() {
-  const ready = Boolean(state.canvasImage) && !state.compareMode;
-  ["zoomOut", "zoomValue", "zoomIn", "fitCanvas"].forEach(id => {
-    const button = $("#" + id);
-    if (button) button.disabled = !ready;
-  });
-}
-
-function comparisonVersion() {
-  if (!state.project?.versions?.length) return null;
-  return state.sourceRef !== "source"
-    ? state.project.versions.find(item => item.id === state.sourceRef) || state.project.versions[0]
-    : state.project.versions[0];
-}
-
-function showComparison() {
-  const version = comparisonVersion();
-  if (!version) return toast("完成一次修改后才能进行原图对比", true);
-  state.compareMode = true;
-  $("#stageCanvas").classList.add("hidden");
-  $("#emptyState").classList.add("hidden");
-  $("#compareOriginal").src = mediaUrl(state.project.source_url);
-  $("#compareResult").src = mediaUrl(version.url);
-  $("#compareView").classList.remove("hidden");
-  $("#compareButton").textContent = "返回单图";
-  syncZoomControls();
-}
-
-function hideComparison() {
-  state.compareMode = false;
-  $("#compareView").classList.add("hidden");
-  $("#stageCanvas").classList.remove("hidden");
-  $("#compareButton").textContent = "原图对比";
-  syncZoomControls();
-}
-
-const ZOOM_STEPS = [0.1, 0.125, 0.167, 0.25, 0.333, 0.5, 0.667, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
-
-function applyZoom(nextZoom, preserveCenter = true) {
-  if (!state.canvasImage) return;
-  const stage = $("#stage");
-  const canvas = $("#stageCanvas");
-  const oldWidth = Math.max(stage.scrollWidth, 1);
-  const oldHeight = Math.max(stage.scrollHeight, 1);
-  const centerX = (stage.scrollLeft + stage.clientWidth / 2) / oldWidth;
-  const centerY = (stage.scrollTop + stage.clientHeight / 2) / oldHeight;
-  state.zoom = Math.max(0.1, Math.min(8, nextZoom));
-  canvas.style.width = `${Math.round(state.canvasImage.naturalWidth * state.zoom)}px`;
-  canvas.style.height = `${Math.round(state.canvasImage.naturalHeight * state.zoom)}px`;
-  $("#zoomValue").textContent = `${Math.round(state.zoom * 100)}%`;
-  $("#zoomOut").disabled = state.zoom <= 0.1;
-  $("#zoomIn").disabled = state.zoom >= 8;
-  requestAnimationFrame(() => {
-    if (preserveCenter) {
-      stage.scrollLeft = centerX * stage.scrollWidth - stage.clientWidth / 2;
-      stage.scrollTop = centerY * stage.scrollHeight - stage.clientHeight / 2;
-    } else {
-      stage.scrollLeft = Math.max(0, (stage.scrollWidth - stage.clientWidth) / 2);
-      stage.scrollTop = Math.max(0, (stage.scrollHeight - stage.clientHeight) / 2);
-    }
-  });
-}
-
-function fitCanvasToStage() {
-  if (!state.canvasImage) return;
-  const stage = $("#stage");
-  const availableWidth = Math.max(1, stage.clientWidth - 28);
-  const availableHeight = Math.max(1, stage.clientHeight - 28);
-  state.fitZoom = Math.min(
-    1,
-    availableWidth / state.canvasImage.naturalWidth,
-    availableHeight / state.canvasImage.naturalHeight,
-  );
-  applyZoom(state.fitZoom, false);
-}
-
-function stepZoom(direction) {
-  // Fitted images often land just below a preset (for example 32.7% next to
-  // 33.3%). Skipping near-identical presets makes every click visibly useful.
-  const minimumRatio = 1.08;
-  const next = direction > 0
-    ? ZOOM_STEPS.find(value => value > state.zoom * minimumRatio) ?? 8
-    : [...ZOOM_STEPS].reverse().find(value => value < state.zoom / minimumRatio) ?? 0.1;
-  applyZoom(next);
-}
-
-function canvasPoint(event) {
-  const canvas = event.currentTarget;
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  return {
-    x: Math.max(0, Math.min(canvas.width - 1, Math.round((event.clientX - rect.left) * scaleX))),
-    y: Math.max(0, Math.min(canvas.height - 1, Math.round((event.clientY - rect.top) * scaleY))),
-  };
-}
-
-function normalizedBox(a, b) {
-  return {
-    x_min: Math.min(a.x, b.x), y_min: Math.min(a.y, b.y),
-    x_max: Math.max(a.x, b.x), y_max: Math.max(a.y, b.y),
-  };
-}
-
-function syncSegmentInputMode() {
-  const input = $("#segmentPrompt");
-  const usingPoints = state.points.length > 0;
-  input.disabled = false;
-  input.title = "";
-  input.placeholder = state.selectionMode === "box"
-    ? "可选：填写标题或对象名称，框选范围优先"
-    : usingPoints ? "当前按点选识别；清空点后可输入名称" : "例如：头发、人物、红色杯子";
-  $("#segmentPromptField").classList.toggle("hidden", state.selectionMode === "box");
-  $("#segmentButton").classList.toggle("hidden", state.selectionMode === "box");
-  $("#pipelineLabel").textContent = state.selectionMode === "box"
-    ? "框选蒙版 → Image2 → 原位回填"
-    : "SAM3 → Image2 → 原位回填";
-  $("#pointModeControls").classList.toggle("hidden", state.selectionMode !== "point");
-  $("#selectionHint").textContent = state.selectionMode === "box"
-    ? "在图片上按住鼠标拖拽，框出完整标题或需要修改的区域。"
-    : "直接点图：普通点击添加目标点，按住 Shift 点击添加排除点。";
-  $("#clearSelection").classList.toggle("hidden", !state.points.length && !state.box);
-  $("#segmentButton").textContent = state.selectionMode === "box"
-    ? "使用框选范围并预览"
-    : "识别并预览修改范围";
-}
-
-$("#stageCanvas").addEventListener("click", event => {
-  if (!state.project || !state.canvasImage || state.selectionMode !== "point") return;
-  state.points.push({...canvasPoint(event), label: event.shiftKey ? 0 : state.pointLabel});
-  syncSegmentInputMode();
-  drawPoints();
-  toast(event.shiftKey ? "已添加排除点" : "已添加目标点");
-});
-
-$("#stageCanvas").addEventListener("pointerdown", event => {
-  if (!state.project || !state.canvasImage || state.selectionMode !== "box") return;
-  state.activeMask = null;
-  state.targetMask = null;
-  state.protectedMasks = [];
-  $("#actionControls").classList.add("disabled");
-  state.dragging = true;
-  state.dragStart = canvasPoint(event);
-  state.box = normalizedBox(state.dragStart, state.dragStart);
-  event.currentTarget.setPointerCapture?.(event.pointerId);
-  drawPoints();
-});
-
-$("#stageCanvas").addEventListener("pointermove", event => {
-  if (!state.dragging || state.selectionMode !== "box") return;
-  state.box = normalizedBox(state.dragStart, canvasPoint(event));
-  drawPoints();
-});
-
-$("#stageCanvas").addEventListener("pointerup", event => {
-  if (!state.dragging || state.selectionMode !== "box") return;
-  state.dragging = false;
-  state.box = normalizedBox(state.dragStart, canvasPoint(event));
-  state.dragStart = null;
-  const valid = state.box.x_max - state.box.x_min >= 4 && state.box.y_max - state.box.y_min >= 4;
-  if (!valid) state.box = null;
-  syncSegmentInputMode();
-  drawPoints();
-  renderProject();
-  persistLayerDraft();
-  if (valid) toast("框选范围已就绪；请填写生成要求");
-});
-
-$("#uploadButton").onclick = () => $("#fileInput").click();
-$("#fileInput").onchange = async event => {
-  const file = event.target.files[0];
-  if (!file) return;
-  const data = new FormData();
-  data.append("name", $("#projectName").value);
-  data.append("image", file);
-  $("#uploadButton").disabled = true;
-  $("#uploadButton b").textContent = "正在写入项目…";
-  try {
-    const project = await api("/api/projects", {method: "POST", body: data});
-    toast("项目已创建，原图已持久化保存");
-    await openProject(project.id);
-    await loadProjects();
-  } catch (error) { toast(error.message, true); }
-  finally { $("#uploadButton").disabled = false; $("#uploadButton b").textContent = "上传原图"; event.target.value = ""; }
+  $('#deleteDialog').close();deletion=null;await loadProjects();toast(ref==='source'?'素材已删除':'版本已删除');
+ }catch(error){errorAt('#deleteError',error.message);}
+ finally{deleting=false;$('#confirmDelete').disabled=false;$('#cancelDelete').disabled=false;$('#confirmDelete').textContent=ref==='source'?'删除素材':'删除版本';}
 };
-
-function selectedSourceUrl() {
-  if (!state.project || state.sourceRef === "source") return state.project?.source_url;
-  return state.project.versions.find(item => item.id === state.sourceRef)?.url;
+async function loadProjects(){try{state.projects=await api('/api/projects');renderProjects();}catch(error){$('#projectList').textContent=error.message;}}
+function renderProjects(){const query=$('#projectSearch').value.trim().toLowerCase(),items=state.projects.filter(p=>p.name.toLowerCase().includes(query));$('#projectList').innerHTML=items.length?items.map(p=>`<button class="project-card" data-project="${esc(p.id)}" aria-current="${state.project?.id===p.id}"><img src="${esc(media(p.thumbnail_url))}" width="55" height="55" loading="lazy" alt=""><span><b>${esc(p.name)}</b><small>${p.width} × ${p.height} · ${p.versions} 个结果</small></span></button>`).join(''):`<p class="helper">${query?'没有匹配的项目，试试其他名称。':'还没有项目。上传一张图片即可开始。'}</p>`;$$('[data-project]').forEach(button=>button.onclick=()=>{$('#libraryDialog').close();openProject(button.dataset.project);});}
+$('#projectSearch').oninput=renderProjects;
+function openDrawer(tab){state.drawerTab=tab;show('#projectsPane',tab==='projects');show('#tasksPane',tab==='tasks');$('#projectsTab').setAttribute('aria-pressed',String(tab==='projects'));$('#tasksTab').setAttribute('aria-pressed',String(tab==='tasks'));$('#libraryTitle').textContent=tab==='projects'?'项目':'任务记录';if(!$('#libraryDialog').open)$('#libraryDialog').showModal();if(tab==='projects')loadProjects();else renderTasks();}
+$('#openProjects').onclick=()=>openDrawer('projects');$('#projectsTab').onclick=()=>openDrawer('projects');$('#tasksTab').onclick=()=>openDrawer('tasks');$('#viewRunningTask').onclick=()=>openDrawer('tasks');
+$('#openCanvasTools').onclick=()=>{$('#imageInfo').textContent=state.image?`${versionName(state.source)} · ${state.image.naturalWidth} × ${state.image.naturalHeight}`:'尚未上传图片';$('#canvasToolsDialog').showModal();};
+$$('[data-close]').forEach(button=>button.onclick=()=>$('#'+button.dataset.close).close());
+const statusName={created:'等待执行',generating:'生成中',completed:'已完成',failed:'未完成',interrupted:'执行中断'};
+function renderTasks(){
+ if(!state.project){$('#taskList').innerHTML='<p class="helper">打开项目后可查看它的任务记录。</p>';return;}
+ const pid=state.project.id,tasks=state.project.tasks;
+ $('#taskList').innerHTML=tasks.length?tasks.map(t=>`<article class="task-card"><header><b class="status-${esc(t.status)}">${statusName[t.status]||'处理中'}</b><time>${esc(new Date(t.created_at).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</time></header><p>${esc(t.prompt||'局部修改')}</p>${t.error?`<p class="inline-error">${esc(t.error)}</p>`:`<p class="helper">${esc(t.stage)}</p>`}<footer>${t.version_id&&!t.result_deleted?`<button data-result="${esc(t.version_id)}">查看结果</button>`:''}${t.can_resume?`<button data-resume="${esc(t.id)}">继续处理已有图片</button>`:''}${isTerminal(t)&&!t.source_deleted?`<button data-copy-task="${esc(t.id)}">使用这些要求</button>`:''}</footer><details><summary>运行详情</summary><p>任务 ${esc(t.id)}\n${esc(t.stage)}${t.can_resume?'\n已有图片可继续处理，不会重新提交生成。':''}</p></details></article>`).join(''):'<p class="helper">还没有生成任务。选择区域并填写修改要求后开始。</p>';
+ $$('[data-result]').forEach(button=>button.onclick=()=>{$('#libraryDialog').close();openProject(pid,button.dataset.result);});
+ $$('[data-resume]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{const t=await post(`/api/projects/${pid}/tasks/${button.dataset.resume}/resume`,{});putTask(pid,t);monitor.watch(pid,t);toast('正在继续处理已有图片。');}catch(error){toast(error.message);}finally{button.disabled=false;}});
+ $$('[data-copy-task]').forEach(button=>button.onclick=async()=>{const t=tasks.find(t=>t.id===button.dataset.copyTask);await openProject(pid,t.source_ref||'source');state.draft.prompt=t.prompt;state.draft.growth_ratio=t.growth_ratio??.08;state.draft.target_mask_id=t.mask_id;restoreInputs();saveDraft();await refreshPreview();$('#libraryDialog').close();$('#workspace').classList.add('editor-open');toast('已载入原修改要求；点击生成会创建一个新结果。');});
 }
-
-async function returnToSelectedSource() {
-  const url = selectedSourceUrl();
-  if (url) await showImage(url, state.sourceRef === "source" ? "原始素材" : `基于版本 ${shortId(state.sourceRef)} 继续`);
-}
-
-$("#setTargetMask").onclick = async () => {
-  if (!state.activeMask) return;
-  state.targetMask = state.activeMask;
-  state.protectedMasks = state.protectedMasks.filter(item => item.id !== state.activeMask.id);
-  state.points = []; syncSegmentInputMode();
-  $("#actionControls").classList.remove("disabled");
-  renderProject(); await persistLayerDraft(); await returnToSelectedSource();
-  toast("已设为修改目标；可继续选择手、袖口等前景保护");
+function putTask(pid,task){state.tasks.set(`${pid}:${task.id}`,task);if(state.project?.id!==pid)return;const index=state.project.tasks.findIndex(t=>t.id===task.id);if(index<0)state.project.tasks.unshift(task);else state.project.tasks[index]=task;renderTasks();syncProgress();renderControls();}
+function syncProgress(){const active=state.project?.tasks.filter(t=>!isTerminal(t))||[];$('#taskCount').textContent=active.length;show('#taskCount',active.length>0);show('#taskProgress',active.length>0);if(active.length){const t=active[0];$('#taskStage').textContent=t.stage||'等待执行';const seconds=Math.max(0,Math.floor((Date.now()-new Date(t.created_at))/1000));$('#taskElapsed').textContent=`已等待 ${Math.floor(seconds/60)}分${seconds%60}秒`;}}
+const monitor=new TaskController(async(pid,task)=>{const previous=state.tasks.get(`${pid}:${task.id}`);putTask(pid,task);if(isTerminal(task)){if(state.project?.id===pid){const ctx=context();const project=await api(`/api/projects/${pid}`);if(current(ctx)){state.project=project;renderVersions();renderTasks();syncProgress();renderControls();if(task.status==='completed'&&!isTerminal(previous||{status:'created'}))toast('生成完成，新结果已保存在版本栏。');}}loadProjects();}},(pid,error)=>{if(state.project?.id===pid){$('#taskStage').textContent='连接中断，正在重新检查任务…';}});
+$('#generateButton').onclick=async()=>{
+ if(state.submitting)return;if(!ready()){if(!state.draft?.prompt.trim()){errorAt('#promptError','请填写希望如何修改。');$('#generationPrompt').focus();}return;}
+ const ctx=context(),body={...payload(),preview_id:state.preview.id};state.submitting=true;renderControls();errorAt('#generationError');
+ const keyName=`catsco-submit:${ctx.pid}:${ctx.source}`;let pending;try{pending=JSON.parse(sessionStorage.getItem(keyName));}catch{}
+ const signature=JSON.stringify(body);const request_id=pending?.signature===signature?pending.id:crypto.randomUUID();
+ try{sessionStorage.setItem(keyName,JSON.stringify({signature,id:request_id}));}catch{}
+ try{await draftStore.flush(draftStore.key(ctx.pid,ctx.source));const task=await post(`/api/projects/${ctx.pid}/generate`,{...body,request_id});try{sessionStorage.removeItem(keyName);}catch{}putTask(ctx.pid,task);monitor.watch(ctx.pid,task);toast('任务已提交，可以切换项目，结果会保存在版本栏。');}
+ catch(error){if(current(ctx))errorAt('#generationError',error.message);else toast(error.message);}
+ finally{state.submitting=false;renderControls();}
 };
-
-$("#addProtectMask").onclick = async () => {
-  if (!state.activeMask) return;
-  if (state.targetMask?.id === state.activeMask.id) return toast("修改目标不能同时作为前景保护", true);
-  if (!state.protectedMasks.some(item => item.id === state.activeMask.id)) state.protectedMasks.push(state.activeMask);
-  state.points = []; syncSegmentInputMode();
-  renderProject(); await persistLayerDraft(); await returnToSelectedSource();
-  toast("已加入前景保护；可继续选择其他需要保持的对象");
-};
-
-$("#clearProtection").onclick = async () => { state.protectedMasks = []; renderProject(); await persistLayerDraft(); toast("已清空前景保护"); };
-
-$$('[data-point-label]').forEach(button => button.onclick = () => {
-  $$('[data-point-label]').forEach(item => item.classList.remove("active"));
-  button.classList.add("active"); state.pointLabel = Number(button.dataset.pointLabel);
-});
-$("#clearPoints").onclick = () => { state.points = []; syncSegmentInputMode(); drawPoints(); };
-$("#clearSelection").onclick = () => {
-  state.points = [];
-  state.box = null;
-  state.activeMask = null;
-  state.targetMask = null;
-  state.protectedMasks = [];
-  syncSegmentInputMode();
-  drawPoints();
-  if (state.project) renderProject();
-  persistLayerDraft();
-};
-
-$$('[data-selection-mode]').forEach(button => button.onclick = () => {
-  $$('[data-selection-mode]').forEach(item => item.classList.remove("active"));
-  button.classList.add("active");
-  state.selectionMode = button.dataset.selectionMode;
-  state.points = [];
-  state.box = null;
-  state.activeMask = null;
-  state.targetMask = null;
-  state.protectedMasks = [];
-  // A rectangle is an anchor, not a hard final boundary.  Give title/text
-  // selections a safer default envelope so a slightly under-drawn box still
-  // leaves room for the replacement glyphs and cleanup of old edges.
-  if (state.selectionMode === "box" && $("#growthMode")) $("#growthMode").value = "0.20";
-  syncSegmentInputMode();
-  drawPoints();
-  if (state.project) renderProject();
-  persistLayerDraft();
-});
-
-async function createSelectionMask(showPreview = true) {
-  const prompt = $("#segmentPrompt").value.trim();
-  const boxes = state.box ? [state.box] : [];
-  if (!state.points.length && !boxes.length && !prompt) throw new Error("请先点一下目标、拖拽框选，或填写目标名称");
-  const mask = await api(`/api/projects/${state.project.id}/segment`, {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({points: state.points, boxes, prompt, source_ref: state.sourceRef, selection_mode: state.selectionMode}),
-  });
-  state.activeMask = mask;
-  state.targetMask = mask;
-  state.protectedMasks = [];
-  state.project = await api(`/api/projects/${state.project.id}`);
-  if (showPreview) {
-    state.canvasImage = null;
-    await showImage(mask.preview_url, "SAM3 蒙版预览");
-  }
-  $("#actionControls").classList.remove("disabled");
-  renderProject();
-  await persistLayerDraft();
-  return mask;
-}
-
-$("#segmentButton").onclick = async () => {
-  const button = $("#segmentButton"); button.disabled = true; button.textContent = "SAM3 正在理解目标…";
-  try {
-    await createSelectionMask(true);
-    toast("SAM3 已按语义选中目标，可以直接生成");
-  } catch (error) { toast(error.message, true); }
-  finally { button.disabled = false; button.textContent = state.selectionMode === "box" ? "使用框选范围并预览" : "识别并预览修改范围"; }
-};
-
-$$('[data-operation]').forEach(button => button.onclick = () => {
-  $$('[data-operation]').forEach(item => item.classList.remove("active"));
-  button.classList.add("active"); state.operation = button.dataset.operation;
-  const needsPrompt = state.operation !== "remove";
-  $("#promptField").classList.toggle("hidden", !needsPrompt);
-  $("#resultObjectField").classList.toggle("hidden", state.operation !== "fill");
-  $("#generateProvider").textContent = state.operation === "fill"
-    ? "Image2 · 原生 mask · 无 LaMa"
-    : state.operation === "replace_background"
-      ? "Image2 · IA 原版 Replace Anything"
-      : "本机 GPU · 不调用付费生图";
-  $("#generateButton span").textContent = state.operation === "remove" ? "移除选中内容" : state.operation === "fill" ? "重绘选中区域" : "保留主体并换背景";
-});
-
-$("#dilation").oninput = event => $("#dilationOutput").textContent = `${event.target.value} px`;
-$("#feather").oninput = event => $("#featherOutput").textContent = `${event.target.value} px`;
-$("#cleanupRadius").oninput = event => $("#cleanupRadiusOutput").textContent = `${event.target.value} px`;
-$("#semanticEdge").oninput = event => $("#semanticEdgeOutput").textContent = `${event.target.value} px`;
-$("#generateButton").onclick = async () => {
-  const prompt = $("#generationPrompt").value.trim();
-  if (state.operation !== "remove" && !prompt) return toast("请写一句希望生成的内容", true);
-  if (!canGenerateFromSelection()) return toast(state.selectionMode === "box" ? "请先拖拽框选修改范围" : "请先识别并预览修改范围", true);
-  const button = $("#generateButton");
-  button.disabled = true;
-  let taskStarted = false;
-  try {
-    if (!state.targetMask && state.selectionMode === "box" && state.box) {
-      $("#taskProgress").classList.remove("hidden");
-      $("#taskStage").textContent = "正在准备框选范围";
-      $("#taskPercent").textContent = "5%";
-      $("#progressBar").style.width = "5%";
-      $("#taskDetail").textContent = "正在自动创建局部修改蒙版，完成后会直接开始生成。";
-      await createSelectionMask(false);
-      $("#taskStage").textContent = "正在提交生成任务";
-      $("#taskPercent").textContent = "10%";
-      $("#progressBar").style.width = "10%";
-    }
-    const task = await api(`/api/projects/${state.project.id}/generate`, {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        operation: state.operation,
-        mask_id: state.targetMask.id,
-        prompt,
-        dilation: Number($("#dilation").value),
-        feather: Number($("#feather").value),
-        protected_mask_ids: state.protectedMasks.map(item => item.id),
-        result_object_prompt: state.operation === "fill" ? $("#resultObjectPrompt").value.trim() : "",
-        pipeline_mode: "simple_fill",
-        cleanup_radius: Number($("#cleanupRadius").value),
-        semantic_edge: Number($("#semanticEdge").value),
-        growth_ratio: Number($("#growthMode").value),
-      }),
-    });
-    taskStarted = true;
-    startPolling(task.id);
-    toast("修改范围已自动准备，正在生成局部修改");
-  } catch (error) {
-    $("#taskProgress").classList.add("hidden");
-    toast(error.message, true);
-  } finally {
-    if (!taskStarted) button.disabled = false;
-  }
-};
-
-async function startPolling(taskId) {
-  clearInterval(state.polling);
-  $("#taskProgress").classList.remove("hidden");
-  const poll = async () => {
-    try {
-      const task = await api(`/api/projects/${state.project.id}/tasks/${taskId}`);
-      $("#taskStage").textContent = task.stage; $("#taskPercent").textContent = `${task.progress}%`; $("#progressBar").style.width = `${task.progress}%`;
-      $("#taskDetail").textContent = task.status === "completed"
-        ? "局部修改已完成，结果已自动设为当前底图。"
-        : task.status === "failed"
-          ? "任务未完成；输入、框选范围和中间文件均已保留。"
-          : "正在处理框选区域，完成后会自动展示结果。";
-      if (["completed", "failed"].includes(task.status)) {
-        clearInterval(state.polling); state.polling = null;
-        $("#generateButton").disabled = false;
-        state.project = await api(`/api/projects/${state.project.id}`);
-        renderProject(); loadProjects();
-        if (task.status === "completed") {
-          const version = state.project.versions.find(item => item.id === task.version_id);
-          await selectSource(version.id, version.url);
-          toast("修改完成并已设为当前底图；现在可继续框选下一处区域");
-        } else { toast(`任务未完成：${friendlyError(task.error)}`, true); }
-      }
-    } catch (error) { clearInterval(state.polling); $("#generateButton").disabled = false; toast(error.message, true); }
-  };
-  await poll(); state.polling = setInterval(poll, 2500);
-}
-
-async function retryTask(taskId) {
-  try {
-    const task = await api(`/api/projects/${state.project.id}/tasks/${taskId}/retry`, {method: "POST"});
-    startPolling(task.id); toast("已按原输入创建一次明确的新重试");
-  } catch (error) { toast(error.message, true); }
-}
-
-async function resumeTask(taskId) {
-  try {
-    const task = await api(`/api/projects/${state.project.id}/tasks/${taskId}/resume`, {method: "POST"});
-    startPolling(task.id); toast("正在恢复同一远程任务，不会再次提交付费生成");
-  } catch (error) { toast(error.message, true); }
-}
-
-$("#showSource").onclick = returnToSelectedSource;
-$("#compareButton").onclick = () => state.compareMode ? hideComparison() : showComparison();
-$("#toggleLibrary").onclick = () => {
-  state.libraryCollapsed = true;
-  $(".workspace").classList.add("library-collapsed");
-  $("#showLibrary").classList.remove("hidden");
-};
-$("#showLibrary").onclick = () => {
-  state.libraryCollapsed = false;
-  $(".workspace").classList.remove("library-collapsed");
-  $("#showLibrary").classList.add("hidden");
-};
-$("#zoomOut").onclick = () => stepZoom(-1);
-$("#zoomIn").onclick = () => stepZoom(1);
-$("#zoomValue").onclick = fitCanvasToStage;
-$("#fitCanvas").onclick = fitCanvasToStage;
-window.addEventListener("keydown", event => {
-  if (!state.canvasImage || !(event.ctrlKey || event.metaKey)) return;
-  if (["+", "="].includes(event.key)) {
-    event.preventDefault(); stepZoom(1);
-  } else if (event.key === "-") {
-    event.preventDefault(); stepZoom(-1);
-  } else if (event.key === "0") {
-    event.preventDefault(); fitCanvasToStage();
-  }
-});
-$("#refreshProjects").onclick = loadProjects;
-$("#projectSearch").oninput = loadProjects;
-
-function operationName(value) { return ({remove: "自然移除", fill: "区域重绘", replace_background: "换背景"})[value] || value; }
-function statusName(value) { return ({created: "等待", generating: "生成中", completed: "已完成", failed: "未完成"})[value] || value; }
-function shortId(value) { return value ? value.slice(-7) : ""; }
-function friendlyError(value = "") {
-  if (value.includes("503") || value.includes("providers_unavailable")) return "Image2 暂时不可用；已保留全部输入，可直接重试。";
-  if (value.toLowerCase().includes("timeout")) return "服务等待超时；任务资料已保留，可确认后重试。";
-  if (value.toLowerCase().includes("cuda") && value.toLowerCase().includes("memory")) return "本机显存不足；原图与蒙版未丢失。";
-  return value.length > 180 ? `${value.slice(0, 180)}…` : value;
-}
-function escapeHtml(value = "") { const node = document.createElement("div"); node.textContent = value; return node.innerHTML; }
-
-const isStaticArtifact = location.pathname.startsWith("/artifacts/");
-const isPublisherLocalQa = location.hostname === "127.0.0.1"
-  && location.port !== "19991"
-  && location.pathname === "/";
-if (!isPublisherLocalQa) {
-  checkHealth();
-  loadProjects().catch(error => toast(error.message, true));
-}
+async function checkCapabilities(){try{state.capabilities=await api('/api/capabilities');}catch{state.capabilities={generation:false,semantic_selection:false,generation_reason:'本地服务未连接，请检查运行状态。'};}const c=state.capabilities;$('#openSettings').classList.toggle('ready',!!c.generation);$('#capabilityDetails').innerHTML=[['上传与手动框选','本地可用'],['智能选区',c.semantic_selection?'已配置':'未配置'],['图片生成',c.generation?'已配置':'未配置']].map(([a,b])=>`<div class="capability-row"><b>${a}</b><span>${b}</span></div>`).join('');renderControls();}
+$('#openSettings').onclick=()=>{$('#settingsDialog').showModal();checkCapabilities();};$('#refreshCapabilities').onclick=checkCapabilities;
+$('#renameProject').onclick=()=>{$('#projectName').value=state.project.name;errorAt('#renameError');$('#renameDialog').showModal();$('#projectName').select();};
+$('#renameForm').onsubmit=async event=>{event.preventDefault();const pid=state.project.id;try{const p=await api(`/api/projects/${pid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('#projectName').value.trim()})});if(state.project?.id===pid){state.project.name=p.name;$('#renameProject').textContent=p.name;}$('#renameDialog').close();loadProjects();}catch(error){errorAt('#renameError',error.message);}};
+$('#exportCurrent').onclick=()=>{const pid=state.project.id;$('#exportLabel').textContent=`${state.project.name} · ${versionName(state.source)}`;$('#downloadCurrent').href=media(state.source==='source'?`/media/projects/${pid}/source.png`:`/api/projects/${pid}/versions/${state.source}/download`);$('#downloadCurrent').textContent=state.source==='source'?'下载工作副本（PNG）':'下载当前版本（PNG）';$('#downloadOriginal').href=media(`/api/projects/${pid}/original/download`);$('#exportDialog').showModal();};
+$('#coordinateButton').onclick=()=>{$('#canvasToolsDialog').close();const b=state.draft.box;$('#boxX').value=b?.x_min||0;$('#boxY').value=b?.y_min||0;$('#boxW').value=b?b.x_max-b.x_min:Math.min(100,state.image.naturalWidth);$('#boxH').value=b?b.y_max-b.y_min:Math.min(100,state.image.naturalHeight);errorAt('#coordinateError');$('#coordinatesDialog').showModal();};
+$('#coordinatesForm').onsubmit=event=>{event.preventDefault();const x=Number($('#boxX').value),y=Number($('#boxY').value),w=Number($('#boxW').value),h=Number($('#boxH').value);if(![x,y,w,h].every(Number.isInteger)||x<0||y<0||w<4||h<4||x+w>state.image.naturalWidth||y+h>state.image.naturalHeight){errorAt('#coordinateError','选区必须位于图片内，宽高至少4像素。');return;}state.draft.box={x_min:x,y_min:y,x_max:x+w,y_max:y+h};invalidateSelection();$('#coordinatesDialog').close();resolveSelection();};
+window.addEventListener('online',()=>{checkCapabilities();draftStore.flushAll();});document.addEventListener('visibilitychange',()=>{if(document.hidden)draftStore.flushAll();});window.addEventListener('pagehide',()=>monitor.stopAll());
+setInterval(syncProgress,1000);
+await checkCapabilities();await loadProjects();let last;try{last=JSON.parse(localStorage.getItem('catsco-v15:lastProject'));}catch{}
+const url=new URL(location.href),pid=url.searchParams.get('project')||last?.pid;if(pid)await openProject(pid,url.searchParams.get('version')||last?.source);

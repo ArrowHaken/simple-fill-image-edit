@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 import json
@@ -37,8 +38,17 @@ from .object_edit_v2 import (
 from .sam3_wavespeed import segment as sam3_segment
 
 
-app = FastAPI(title="CatsCo Semantic Fill", version="0.1.0-experimental")
+@asynccontextmanager
+async def lifespan(app):
+    # This local workbench uses a single process. Never silently restart paid work.
+    from .workbench import mark_interrupted_tasks
+    mark_interrupted_tasks()
+    yield
+
+
+app = FastAPI(title="CatsCo Image Workbench", version="0.2.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=settings.root / "app" / "static"), name="static")
+app.mount("/assets", StaticFiles(directory=settings.root / "app" / "static" / "assets"), name="assets")
 app.mount("/media", StaticFiles(directory=settings.data_dir), name="media")
 
 executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="inpaint-task")
@@ -78,12 +88,23 @@ class GenerateRequest(BaseModel):
     cleanup_radius: int = Field(default=10, ge=0, le=24)
     semantic_edge: int = Field(default=6, ge=0, le=16)
     growth_ratio: float = Field(default=0.35, ge=0.0, le=1.0)
+    request_id: str | None = Field(default=None, max_length=100)
+    preview_id: str | None = None
+    source_ref: str | None = None
 
 
 class EditDraftRequest(BaseModel):
     source_ref: str = "source"
     target_mask_id: str | None = None
     protected_mask_ids: list[str] = Field(default_factory=list)
+    prompt: str = Field(default="", max_length=6000)
+    segment_prompt: str = Field(default="", max_length=32)
+    selection_mode: Literal["box", "point", "text"] = "box"
+    points: list[Point] = Field(default_factory=list)
+    box: Box | None = None
+    growth_ratio: float = Field(default=0.08, ge=0, le=1)
+    revision: int = Field(default=0, ge=0)
+    expected_revision: int | None = None
 
 
 def _resolve_source(project: dict, source_ref: str) -> Path:
@@ -227,12 +248,29 @@ async def create_project(name: str = Form(""), image: UploadFile = File(...)):
     try:
         from io import BytesIO
         with Image.open(BytesIO(raw)) as opened:
-            normalized = ImageOps.exif_transpose(opened).convert("RGB")
-            width, height = normalized.size
+            width, height = opened.size
             if width * height > 120_000_000:
                 raise HTTPException(413, "图片像素总量超过 1.2 亿，浏览器无法安全处理")
-            project = storage.create_project(name, image.filename or "image", width, height)
-            normalized.save(storage.project_dir(project["id"]) / "source.png", format="PNG")
+            oriented = ImageOps.exif_transpose(opened)
+            has_alpha = "A" in oriented.getbands() or "transparency" in oriented.info
+            if has_alpha:
+                rgba = oriented.convert("RGBA")
+                background = Image.new("RGBA", rgba.size, "white")
+                normalized = Image.alpha_composite(background, rgba).convert("RGB")
+            else:
+                normalized = oriented.convert("RGB")
+            width, height = normalized.size
+            source_name = Path((image.filename or "image").replace("\\", "/")).name
+            project = storage.create_project(name or Path(source_name).stem, source_name, width, height)
+            folder = storage.project_dir(project["id"])
+            normalized.save(folder / "source.png", format="PNG")
+            extension = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}[image.content_type]
+            original_file = "original" + extension
+            (folder / original_file).write_bytes(raw)
+            thumbnail = normalized.copy()
+            thumbnail.thumbnail((160, 160))
+            thumbnail.save(folder / "thumbnail.jpg", quality=85)
+            project = storage.update_project(project["id"], lambda current: current.update(original_file=original_file, has_alpha=has_alpha))
     except HTTPException:
         raise
     except Exception as exc:
@@ -250,18 +288,20 @@ def get_project(project_id: str):
 
 @app.post("/api/projects/{project_id}/edit-draft")
 def save_edit_draft(project_id: str, request: EditDraftRequest):
+    from .workbench import save_draft
     try:
-        project = storage.read_project(project_id)
-        mask_ids = ([request.target_mask_id] if request.target_mask_id else []) + request.protected_mask_ids
-        for mask_id in mask_ids:
-            record = _mask_record(project, mask_id)
-            if record.get("source_ref", "source") != request.source_ref:
-                raise HTTPException(400, "编辑草稿中的蒙版不属于当前底图版本")
-        project["edit_draft"] = request.model_dump()
-        storage.write_project(project)
-        return project["edit_draft"]
+        return save_draft(project_id, request)
     except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise HTTPException(404, "项目或版本不存在。") from exc
+
+
+@app.post("/api/projects/{project_id}/edit-preview")
+def edit_preview(project_id: str, request: GenerateRequest):
+    from .workbench import create_preview
+    try:
+        return create_preview(project_id, request)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "项目或选区不存在。") from exc
 
 
 @app.post("/api/projects/{project_id}/segment")
@@ -313,9 +353,9 @@ def segment(project_id: str, request: SegmentRequest):
             "created_at": storage.now_iso(),
             "provider": provider,
         }
-        project["masks"].insert(0, record)
-        project["active_mask_id"] = mask_id
-        storage.write_project(project)
+        def add_mask(current):
+            current["masks"].insert(0, record)
+        storage.update_project(project_id, add_mask)
         return {
             **record,
             "url": f"/media/projects/{project_id}/masks/{mask_id}.png",
@@ -323,8 +363,10 @@ def segment(project_id: str, request: SegmentRequest):
         }
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(502, f"SAM3 分割失败：{exc}") from exc
+        raise HTTPException(502, f"选区识别失败：{exc}") from exc
 
 
 def _set_task(project_id: str, task_id: str, stage: str, progress: int, **extra):
@@ -353,11 +395,10 @@ def _run_task(project_id: str, task_id: str) -> None:
                 (original.shape[1], original.shape[0]),
             ))
         if task.get("pipeline_mode") == "simple_fill" and task["operation"] == "fill":
-            simple_mask, simple_mask_record = build_simple_fill_mask(
-                mask,
-                cleanup_radius_px=task.get("dilation", 6),
-                growth_ratio=task.get("growth_ratio", 0.35),
-            )
+            from .workbench import simple_plan
+            edit_plan = simple_plan(mask, task)
+            simple_mask = edit_plan["editable"]
+            simple_mask_record = edit_plan["record"]
             layered_masks = {
                 "envelope": simple_mask,
                 "protection": np.zeros_like(simple_mask),
@@ -450,7 +491,17 @@ def _run_task(project_id: str, task_id: str) -> None:
 
             provider_prompt = _generation_prompt(task, mask_meta)
 
-            if settings.masked_image2_key_ready:
+            from .workbench import cached_provider
+            cached = cached_provider(task)
+            if cached:
+                provider_path = cached
+                record_path = task_dir / "cached-provider-record.json"
+                provider_record = json.loads(record_path.read_text(encoding="utf-8")) if record_path.is_file() else {"provider": "gpt-image-2-native-mask"}
+                provider_record["resumed_from_local_image"] = True
+                progress("已读取生成图片，继续本地处理", 82)
+            elif task.get("resume_only"):
+                raise RuntimeError("已生成图片不可用；已停止恢复，没有重新提交生成。")
+            elif settings.masked_image2_key_ready:
                 provider_path, provider_record = run_masked_image2(
                     crop_source_path,
                     crop_mask,
@@ -478,6 +529,8 @@ def _run_task(project_id: str, task_id: str) -> None:
                     inpaint_anything_crop=True,
                 )
             provider_artifact_name = provider_path.name
+            (task_dir / "cached-provider-record.json").write_text(json.dumps(provider_record, ensure_ascii=False), encoding="utf-8")
+            storage.update_task(project_id, task_id, artifacts={**storage.read_task(project_id, task_id).get("artifacts", {}), "provider_original": provider_artifact_name})
             generated_crop = read_rgb(provider_path)
             if generated_crop.shape[:2] != crop_image.shape[:2]:
                 generated_crop = cv2.resize(
@@ -620,6 +673,8 @@ def _run_task(project_id: str, task_id: str) -> None:
                         ).astype(np.uint8)
                     else:
                         commit_mask = effective_mask.copy()
+                    if task.get("pipeline_mode") == "simple_fill":
+                        commit_mask = edit_plan["commit"]
                     Image.fromarray(commit_mask).save(task_dir / "commit-mask.png")
                     if task.get("pipeline_mode") == "simple_fill":
                         # Image2 returns a complete crop whose low-frequency
@@ -628,14 +683,7 @@ def _run_task(project_id: str, task_id: str) -> None:
                         # on large posters, so derive a wider seam from the
                         # generated envelope while keeping the user's value
                         # as the minimum.
-                        generated_feather = min(
-                            32,
-                            max(
-                                int(task.get("feather", 3)),
-                                16,
-                                int((simple_mask_record or {}).get("growth_radius_px", 0) * 0.45),
-                            ),
-                        )
+                        generated_feather = edit_plan["feather"]
                         if removal_fill:
                             result = seamless_composite(
                                 original,
@@ -764,8 +812,7 @@ def _run_task(project_id: str, task_id: str) -> None:
             "height": int(result.shape[0]),
             "created_at": storage.now_iso(),
         }
-        project["versions"].insert(0, version)
-        storage.write_project(project)
+        storage.update_project(project_id, lambda current: current["versions"].insert(0, version))
         artifacts = storage.read_task(project_id, task_id).get("artifacts", {})
         artifacts.update({
             "result": f"../../versions/{filename}",
@@ -833,30 +880,11 @@ def _run_task(project_id: str, task_id: str) -> None:
 
 @app.post("/api/projects/{project_id}/generate")
 def generate(project_id: str, request: GenerateRequest):
+    from .workbench import submit
     try:
-        project = storage.read_project(project_id)
-        target_meta = _mask_record(project, request.mask_id)
-        for protected_id in request.protected_mask_ids:
-            protected_meta = _mask_record(project, protected_id)
-            if protected_meta.get("source_ref", "source") != target_meta.get("source_ref", "source"):
-                raise HTTPException(400, "目标与前景保护必须来自同一底图版本")
+        return submit(project_id, request)
     except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    if request.operation != "remove" and not request.prompt.strip():
-        raise HTTPException(400, "区域重绘或换背景需要一句生成要求")
-    task = storage.create_task(
-        project_id, request.operation, request.prompt.strip(),
-        request.mask_id, request.dilation,
-        request.feather,
-        request.protected_mask_ids,
-        request.result_object_prompt,
-        request.pipeline_mode,
-        request.cleanup_radius,
-        request.semantic_edge,
-        request.growth_ratio,
-    )
-    executor.submit(_run_task, project_id, task["id"])
-    return task
+        raise HTTPException(404, "项目或选区不存在。") from exc
 
 
 @app.post("/api/projects/{project_id}/tasks/{task_id}/retry")
@@ -864,47 +892,29 @@ def retry(project_id: str, task_id: str):
     try:
         previous = storage.read_task(project_id, task_id)
     except FileNotFoundError as exc:
-        raise HTTPException(404, "任务不存在") from exc
-    if previous["status"] not in {"failed", "completed"}:
-        raise HTTPException(409, "任务仍在运行，不能重复提交")
-    task = storage.create_task(
-        project_id, previous["operation"], previous.get("prompt", ""),
-        previous["mask_id"], previous.get("dilation", 40),
-        previous.get("feather", 5),
-        previous.get("protected_mask_ids", []),
-        previous.get("result_object_prompt", ""),
-        previous.get("pipeline_mode", "legacy"),
-        previous.get("cleanup_radius", 10),
-        previous.get("semantic_edge", 6),
-        previous.get("growth_ratio", 0.35),
-    )
-    task = storage.update_task(project_id, task["id"], retry_of=task_id)
-    executor.submit(_run_task, project_id, task["id"])
-    return task
+        raise HTTPException(404, "任务不存在。") from exc
+    if previous["status"] not in {"failed", "completed", "interrupted"}:
+        raise HTTPException(409, "任务仍在运行。")
+    values = {key: value for key, value in previous.items() if key in GenerateRequest.model_fields}
+    values.pop("request_id", None)
+    values.pop("preview_id", None)
+    return generate(project_id, GenerateRequest(**values))
 
 
 @app.post("/api/projects/{project_id}/tasks/{task_id}/resume")
 def resume(project_id: str, task_id: str):
+    from .workbench import resume_cached
     try:
-        task = storage.read_task(project_id, task_id)
+        return resume_cached(project_id, task_id)
     except FileNotFoundError as exc:
-        raise HTTPException(404, "任务不存在") from exc
-    if task.get("provider") != "image2":
-        raise HTTPException(400, "只有 Image2 任务支持恢复远程结果")
-    if task.get("status") != "failed":
-        raise HTTPException(409, "只有未完成的 Image2 任务可以恢复")
-    task = storage.update_task(
-        project_id, task_id,
-        status="created", stage="正在恢复同一远程任务", progress=10, error=None,
-    )
-    executor.submit(_run_task, project_id, task_id)
-    return task
+        raise HTTPException(404, "任务不存在。") from exc
 
 
 @app.get("/api/projects/{project_id}/tasks/{task_id}")
 def get_task(project_id: str, task_id: str):
     try:
-        return storage.read_task(project_id, task_id)
+        from .workbench import public_task
+        return public_task(storage.read_task(project_id, task_id))
     except FileNotFoundError as exc:
         raise HTTPException(404, "任务不存在") from exc
 
@@ -918,3 +928,7 @@ def download_version(project_id: str, version_id: str):
     except (FileNotFoundError, StopIteration) as exc:
         raise HTTPException(404, "版本不存在") from exc
     return FileResponse(path, media_type="image/png", filename=f"{project['name']}-{version_id}.png")
+
+
+from .workbench import router as workbench_router
+app.include_router(workbench_router)
