@@ -237,14 +237,32 @@ function renderTasks(){
 }
 function putTask(pid,task){state.tasks.set(`${pid}:${task.id}`,task);if(state.project?.id!==pid)return;const index=state.project.tasks.findIndex(t=>t.id===task.id);if(index<0)state.project.tasks.unshift(task);else state.project.tasks[index]=task;renderTasks();syncProgress();renderControls();}
 function syncProgress(){const active=state.project?.tasks.filter(t=>!isTerminal(t))||[];$('#taskCount').textContent=active.length;show('#taskCount',active.length>0);show('#taskProgress',active.length>0);if(active.length){const t=active[0];$('#taskStage').textContent=t.stage||'等待执行';const seconds=Math.max(0,Math.floor((Date.now()-new Date(t.created_at))/1000));$('#taskElapsed').textContent=`已等待 ${Math.floor(seconds/60)}分${seconds%60}秒`;}}
-const monitor=new TaskController(async(pid,task)=>{const previous=state.tasks.get(`${pid}:${task.id}`);putTask(pid,task);if(isTerminal(task)){if(state.project?.id===pid){const ctx=context();const project=await api(`/api/projects/${pid}`);if(current(ctx)){state.project=project;renderVersions();renderTasks();syncProgress();renderControls();if(task.status==='completed'&&!isTerminal(previous||{status:'created'}))toast('生成完成，新结果已保存在版本栏。');}}loadProjects();}},(pid,error)=>{if(state.project?.id===pid){$('#taskStage').textContent='连接中断，正在重新检查任务…';}});
+const monitor=new TaskController(async(pid,task)=>{
+ const previous=state.tasks.get(`${pid}:${task.id}`);
+ const justCompleted=task.status==='completed'&&!isTerminal(previous||{status:'created'});
+ const shouldReveal=justCompleted&&task.version_id&&state.project?.id===pid&&state.source===(task.source_ref||'source');
+ putTask(pid,task);
+ if(isTerminal(task)){
+  if(shouldReveal){
+   await openProject(pid,task.version_id);
+   toast(state.project?.id===pid&&state.source===task.version_id?'生成完成，已自动展示新结果。':'生成完成，新结果已保存在版本栏。');
+  }else if(state.project?.id===pid){
+   const ctx=context(),project=await api(`/api/projects/${pid}`);
+   if(current(ctx)){
+    state.project=project;renderVersions();renderTasks();syncProgress();renderControls();
+    if(justCompleted)toast('生成完成，新结果已保存在版本栏。');
+   }
+  }
+  loadProjects();
+ }
+},(pid,error)=>{if(state.project?.id===pid){$('#taskStage').textContent='连接中断，正在重新检查任务…';}});
 $('#generateButton').onclick=async()=>{
  if(state.submitting)return;if(!ready()){if(!state.draft?.prompt.trim()){errorAt('#promptError','请填写希望如何修改。');$('#generationPrompt').focus();}return;}
  const ctx=context(),body={...payload(),preview_id:state.preview.id};state.submitting=true;renderControls();errorAt('#generationError');
  const keyName=`catsco-submit:${ctx.pid}:${ctx.source}`;let pending;try{pending=JSON.parse(sessionStorage.getItem(keyName));}catch{}
  const signature=JSON.stringify(body);const request_id=pending?.signature===signature?pending.id:crypto.randomUUID();
  try{sessionStorage.setItem(keyName,JSON.stringify({signature,id:request_id}));}catch{}
- try{await draftStore.flush(draftStore.key(ctx.pid,ctx.source));const task=await post(`/api/projects/${ctx.pid}/generate`,{...body,request_id});try{sessionStorage.removeItem(keyName);}catch{}putTask(ctx.pid,task);monitor.watch(ctx.pid,task);toast('任务已提交，可以切换项目，结果会保存在版本栏。');}
+ try{await draftStore.flush(draftStore.key(ctx.pid,ctx.source));const task=await post(`/api/projects/${ctx.pid}/generate`,{...body,request_id});try{sessionStorage.removeItem(keyName);}catch{}putTask(ctx.pid,task);monitor.watch(ctx.pid,task);toast('任务已提交，完成后会自动展示新结果。');}
  catch(error){if(current(ctx))errorAt('#generationError',error.message);else toast(error.message);}
  finally{state.submitting=false;renderControls();}
 };
