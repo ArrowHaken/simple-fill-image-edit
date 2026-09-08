@@ -195,19 +195,28 @@ def public_project(project: dict[str, Any]) -> dict[str, Any]:
     result = dict(project)
     pid = project["id"]
     result["source_url"] = f"/media/projects/{pid}/source.png"
+    result["source_display_url"] = f"/api/projects/{pid}/browser-image/source/display"
+    result["source_thumbnail_url"] = f"/api/projects/{pid}/browser-image/source/thumbnail"
     result["masks"] = [
         {**mask, "url": f"/media/projects/{pid}/masks/{mask['id']}.png",
          "preview_url": f"/media/projects/{pid}/masks/{mask['id']}-preview.png"}
         for mask in project.get("masks", [])
     ]
     result["versions"] = [
-        {**version, "url": f"/media/projects/{pid}/versions/{version['filename']}"}
+        {
+            **version,
+            "url": f"/media/projects/{pid}/versions/{version['filename']}",
+            "display_url": f"/api/projects/{pid}/browser-image/{version['id']}/display",
+            "thumbnail_url": f"/api/projects/{pid}/browser-image/{version['id']}/thumbnail",
+        }
         for version in project.get("versions", [])
     ]
     sources = {v["id"]: f"/media/projects/{pid}/versions/{v['filename']}"
                for v in project.get("versions", []) + project.get("deleted_versions", [])}
     for version in result["versions"]:
         version["base_url"] = sources.get(version.get("source_ref"), result["source_url"])
+        base_ref = version.get("source_ref", "source")
+        version["display_base_url"] = f"/api/projects/{pid}/browser-image/{base_ref}/display"
     result.pop("deleted_versions", None)
     tasks = []
     for task_id in project.get("tasks", []):

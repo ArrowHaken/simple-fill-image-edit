@@ -20,7 +20,11 @@ function errorAt(id,text=''){ $(id).textContent=text;show(id,!!text); }
 function defaults(source){return {source_ref:source,target_mask_id:null,protected_mask_ids:[],prompt:'',segment_prompt:'',selection_mode:'box',points:[],box:null,growth_ratio:.08,revision:0};}
 function saveDraft(){if(state.project&&state.draft) draftStore.update(state.project.id,state.source,state.draft);}
 function imageAt(url){return new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>reject(new Error('图片加载失败，请重试打开该项目。'));image.src=media(url);});}
-function sourceUrl(ref=state.source){return ref==='source'?state.project.source_url:state.project.versions.find(v=>v.id===ref)?.url;}
+function sourceUrl(ref=state.source,variant='display'){
+ if(ref==='source')return variant==='thumbnail'?(state.project.source_thumbnail_url||state.project.source_url):(state.project.source_display_url||state.project.source_url);
+ const version=state.project.versions.find(v=>v.id===ref);
+ return variant==='thumbnail'?(version?.thumbnail_url||version?.url):(version?.display_url||version?.url);
+}
 function versionName(ref){if(ref==='source')return '原始素材';const i=state.project.versions.findIndex(v=>v.id===ref);return `版本 ${state.project.versions[i]?.number||state.project.versions.length-i}`;}
 function payload(){return {operation:'fill',mask_id:state.draft.target_mask_id,prompt:state.draft.prompt.trim(),dilation:6,feather:3,protected_mask_ids:[],result_object_prompt:'',pipeline_mode:'simple_fill',cleanup_radius:10,semantic_edge:6,growth_ratio:Number(state.draft.growth_ratio),source_ref:state.source};}
 function matchingTask(){const d=state.draft;return d&&state.project?.tasks.find(t=>!isTerminal(t)&&t.mask_id===d.target_mask_id&&t.prompt===d.prompt.trim()&&Number(t.growth_ratio)===Number(d.growth_ratio));}
@@ -164,12 +168,12 @@ $('#stage').addEventListener('dragover',event=>{event.preventDefault();$('#stage
 $('#openEditor').onclick=()=>{$('#workspace').classList.add('editor-open');$('#closeEditor').focus();};$('#closeEditor').onclick=()=>{$('#workspace').classList.remove('editor-open');$('#stage').focus();};
 $('#toggleOverlay').onclick=()=>{state.overlayVisible=!state.overlayVisible;draw();renderControls();};
 $('#zoomIn').onclick=()=>applyZoom(state.zoom*1.25);$('#zoomOut').onclick=()=>applyZoom(state.zoom/1.25);$('#fitCanvas').onclick=fitCanvas;
-$('#compareButton').onclick=()=>{if(state.mode==='compare'){state.mode='single';show('#compareView',false);show('#stageCanvas',true);}else{const v=state.project.versions.find(v=>v.id===state.source);if(!v)return;state.mode='compare';$('#compareOriginal').src=media(v.base_url||sourceUrl(v.source_ref||'source'));$('#compareResult').src=media(v.url);show('#compareView',true);show('#stageCanvas',false);}renderControls();};
+$('#compareButton').onclick=()=>{if(state.mode==='compare'){state.mode='single';show('#compareView',false);show('#stageCanvas',true);}else{const v=state.project.versions.find(v=>v.id===state.source);if(!v)return;state.mode='compare';$('#compareOriginal').src=media(v.display_base_url||v.base_url||sourceUrl(v.source_ref||'source'));$('#compareResult').src=media(v.display_url||v.url);show('#compareView',true);show('#stageCanvas',false);}renderControls();};
 const trashIcon = '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></svg>';
 function renderVersions(){
  if(!state.project)return;const p=state.project;$('#versionCount').textContent=`${p.versions.length} 个结果`;
- const items=[{id:'source',url:p.source_url},...p.versions.slice().reverse()];
- $('#versionList').innerHTML=items.map(v=>`<div class="version-item"><button class="version-card" data-version="${esc(v.id)}" aria-current="${v.id===state.source}"><img src="${esc(media(v.url))}" width="56" height="48" alt="" loading="lazy"><span>${esc(versionName(v.id))}<small>${v.id==='source'?'原图':esc((v.prompt||'局部修改').slice(0,20))}</small></span></button><button class="version-delete delete-icon" data-delete-version="${esc(v.id)}" aria-label="${v.id==='source'?'删除素材及全部版本':`删除${esc(versionName(v.id))}`}" title="${v.id==='source'?'删除素材及全部版本':'删除此版本'}">${trashIcon}</button></div>`).join('');
+ const items=[{id:'source',url:p.source_url,thumbnail_url:p.source_thumbnail_url},...p.versions.slice().reverse()];
+ $('#versionList').innerHTML=items.map(v=>`<div class="version-item"><button class="version-card" data-version="${esc(v.id)}" aria-current="${v.id===state.source}"><img src="${esc(media(v.thumbnail_url||v.url))}" width="56" height="48" alt="" loading="lazy"><span>${esc(versionName(v.id))}<small>${v.id==='source'?'原图':esc((v.prompt||'局部修改').slice(0,20))}</small></span></button><button class="version-delete delete-icon" data-delete-version="${esc(v.id)}" aria-label="${v.id==='source'?'删除素材及全部版本':`删除${esc(versionName(v.id))}`}" title="${v.id==='source'?'删除素材及全部版本':'删除此版本'}">${trashIcon}</button></div>`).join('');
  $$('[data-version]').forEach(button=>button.onclick=()=>openProject(p.id,button.dataset.version));
  $$('[data-delete-version]').forEach(button=>button.onclick=()=>requestDelete(button.dataset.deleteVersion));
 }
@@ -178,7 +182,7 @@ function requestDelete(ref='source'){
  if(!state.project||state.opening||state.selecting||state.submitting)return;
  deletion={ctx:context(),ref};
  $('#deleteTitle').textContent=ref==='source'?'删除这份素材？':'删除这个版本？';
- $('#deleteThumbnail').src=media(sourceUrl(ref));
+ $('#deleteThumbnail').src=media(sourceUrl(ref,'thumbnail'));
  $('#deleteName').textContent=state.project.name;
  $('#deleteMeta').textContent=ref==='source'?`${state.project.versions.length} 个结果 · ${state.project.tasks.length} 条任务记录`:versionName(ref);
  $('#deleteDescription').textContent=ref==='source'?'素材及其全部版本、任务记录将从工作台移除。':`仅移除此版本，其他结果保留。${state.source===ref?'画布将返回原图。':''}`;
@@ -270,7 +274,23 @@ async function checkCapabilities(){try{state.capabilities=await api('/api/capabi
 $('#openSettings').onclick=()=>{$('#settingsDialog').showModal();checkCapabilities();};$('#refreshCapabilities').onclick=checkCapabilities;
 $('#renameProject').onclick=()=>{$('#projectName').value=state.project.name;errorAt('#renameError');$('#renameDialog').showModal();$('#projectName').select();};
 $('#renameForm').onsubmit=async event=>{event.preventDefault();const pid=state.project.id;try{const p=await api(`/api/projects/${pid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('#projectName').value.trim()})});if(state.project?.id===pid){state.project.name=p.name;$('#renameProject').textContent=p.name;}$('#renameDialog').close();loadProjects();}catch(error){errorAt('#renameError',error.message);}};
-$('#exportCurrent').onclick=()=>{const pid=state.project.id;$('#exportLabel').textContent=`${state.project.name} · ${versionName(state.source)}`;$('#downloadCurrent').href=media(state.source==='source'?`/media/projects/${pid}/source.png`:`/api/projects/${pid}/versions/${state.source}/download`);$('#downloadCurrent').textContent=state.source==='source'?'下载工作副本（PNG）':'下载当前版本（PNG）';$('#downloadOriginal').href=media(`/api/projects/${pid}/original/download`);$('#exportDialog').showModal();};
+$('#exportCurrent').onclick=()=>{const pid=state.project.id;$('#exportLabel').textContent=`${state.project.name} · ${versionName(state.source)}`;$('#downloadCurrent').href=media(state.source==='source'?`/media/projects/${pid}/source.png`:`/api/projects/${pid}/versions/${state.source}/download`);$('#downloadCurrent').textContent=state.source==='source'?'下载工作副本（PNG）':'下载当前版本（PNG）';$('#downloadOriginal').href=media(`/api/projects/${pid}/original/download`);$('#downloadStatus').textContent='点击后会显示下载进度；后台生成任务不会阻塞导出。';$('#exportDialog').showModal();};
+async function downloadFile(event){
+ event.preventDefault();const button=event.currentTarget;if(button.dataset.downloading)return;
+ const label=button.textContent,url=button.href;button.dataset.downloading='true';button.setAttribute('aria-disabled','true');
+ try{
+  const response=await fetch(url);if(!response.ok)throw new Error(`下载请求失败（${response.status}）`);
+  const total=Number(response.headers.get('content-length'))||0;
+  if(total>64*1024*1024){await response.body?.cancel();location.assign(url);$('#exportDialog').close();toast('已交给浏览器下载，请查看下载列表。');return;}
+  let blob;
+  if(response.body&&total){const reader=response.body.getReader(),chunks=[];let received=0;for(;;){const {done,value}=await reader.read();if(done)break;chunks.push(value);received+=value.length;const percent=Math.min(100,Math.round(received/total*100));button.textContent=`正在准备 ${percent}%`;$('#downloadStatus').textContent=`正在传输 ${(received/1024/1024).toFixed(1)} / ${(total/1024/1024).toFixed(1)} MB`;}blob=new Blob(chunks,{type:response.headers.get('content-type')||'application/octet-stream'});}
+  else blob=await response.blob();
+  const disposition=response.headers.get('content-disposition')||'',encoded=/filename\*=utf-8''([^;]+)/i.exec(disposition)?.[1],plain=/filename="?([^";]+)"?/i.exec(disposition)?.[1];
+  const filename=encoded?decodeURIComponent(encoded):plain||`${state.project?.name||'catsco-image'}.png`,objectUrl=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=objectUrl;anchor.download=filename;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(objectUrl),30000);$('#exportDialog').close();toast('下载已开始，请查看浏览器下载列表。');
+ }catch(error){$('#downloadStatus').textContent=error.message;toast(error.message);}
+ finally{button.textContent=label;button.removeAttribute('aria-disabled');delete button.dataset.downloading;}
+}
+$('#downloadCurrent').onclick=downloadFile;$('#downloadOriginal').onclick=downloadFile;
 $('#coordinateButton').onclick=()=>{$('#canvasToolsDialog').close();const b=state.draft.box;$('#boxX').value=b?.x_min||0;$('#boxY').value=b?.y_min||0;$('#boxW').value=b?b.x_max-b.x_min:Math.min(100,state.image.naturalWidth);$('#boxH').value=b?b.y_max-b.y_min:Math.min(100,state.image.naturalHeight);errorAt('#coordinateError');$('#coordinatesDialog').showModal();};
 $('#coordinatesForm').onsubmit=event=>{event.preventDefault();const x=Number($('#boxX').value),y=Number($('#boxY').value),w=Number($('#boxW').value),h=Number($('#boxH').value);if(![x,y,w,h].every(Number.isInteger)||x<0||y<0||w<4||h<4||x+w>state.image.naturalWidth||y+h>state.image.naturalHeight){errorAt('#coordinateError','选区必须位于图片内，宽高至少4像素。');return;}state.draft.box={x_min:x,y_min:y,x_max:x+w,y_max:y+h};invalidateSelection();$('#coordinatesDialog').close();resolveSelection();};
 window.addEventListener('online',()=>{checkCapabilities();draftStore.flushAll();});document.addEventListener('visibilitychange',()=>{if(document.hidden)draftStore.flushAll();});window.addEventListener('pagehide',()=>monitor.stopAll());

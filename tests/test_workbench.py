@@ -134,5 +134,20 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual((folder/p['original_file']).read_bytes(),raw)
         with Image.open(folder/'source.png') as working:self.assertEqual(working.getpixel((0,0)),(255,255,255))
 
+    def test_browser_derivatives_are_small_cached_and_keep_canvas_dimensions(self):
+        pid = self.project['id']
+        project = storage.read_project(pid)
+        display = main._browser_image(project, 'source', 'display')
+        thumbnail = main._browser_image(project, 'source', 'thumbnail')
+        display_mtime = display.stat().st_mtime_ns
+        with Image.open(display) as image:
+            self.assertEqual(image.size, (512, 512))
+        with Image.open(thumbnail) as image:
+            self.assertLessEqual(max(image.size), 240)
+        self.assertEqual(main._browser_image(project, 'source', 'display').stat().st_mtime_ns, display_mtime)
+        public = storage.public_project(project)
+        self.assertIn('/browser-image/source/display', public['source_display_url'])
+        self.assertIn('/browser-image/source/thumbnail', public['source_thumbnail_url'])
+
 
 if __name__=='__main__': unittest.main()

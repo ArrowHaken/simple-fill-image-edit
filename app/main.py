@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 import json
+import os
 import re
 import threading
 
@@ -53,6 +54,53 @@ app.mount("/media", StaticFiles(directory=settings.data_dir), name="media")
 
 executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="inpaint-task")
 lama_run_lock = threading.Lock()
+browser_image_lock = threading.Lock()
+
+
+def _project_image_path(project: dict, image_ref: str) -> Path:
+    folder = storage.project_dir(project["id"])
+    if image_ref == "source":
+        return folder / "source.png"
+    version = next(
+        (item for item in project.get("versions", []) + project.get("deleted_versions", [])
+         if item["id"] == image_ref),
+        None,
+    )
+    if version is None:
+        raise FileNotFoundError(image_ref)
+    return folder / "versions" / version["filename"]
+
+
+def _browser_image(project: dict, image_ref: str, variant: str) -> Path:
+    """Build a small browser-friendly derivative without changing export quality."""
+    source = _project_image_path(project, image_ref)
+    if not source.is_file():
+        raise FileNotFoundError(image_ref)
+    cache = storage.project_dir(project["id"]) / "browser-cache"
+    target = cache / f"{image_ref}-{variant}.webp"
+    with browser_image_lock:
+        if target.is_file() and target.stat().st_mtime_ns >= source.stat().st_mtime_ns:
+            return target
+        cache.mkdir(parents=True, exist_ok=True)
+        with Image.open(source) as opened:
+            image = ImageOps.exif_transpose(opened)
+            if variant == "thumbnail":
+                image.thumbnail((240, 240), Image.Resampling.LANCZOS)
+            if image.mode not in {"RGB", "RGBA"}:
+                image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+            temp = target.with_suffix(".tmp.webp")
+            image.save(
+                temp,
+                format="WEBP",
+                quality=82 if variant == "thumbnail" else 88,
+                method=4,
+            )
+            os.replace(temp, target)
+    return target
+
+
+def _browser_image_url(project_id: str, image_ref: str, variant: str) -> str:
+    return f"/api/projects/{project_id}/browser-image/{image_ref}/{variant}"
 
 
 class Point(BaseModel):
@@ -231,9 +279,8 @@ def projects():
         "id": item["id"], "name": item["name"], "updated_at": item["updated_at"],
         "width": item["width"], "height": item["height"],
         "versions": len(item.get("versions", [])), "tasks": len(item.get("tasks", [])),
-        "thumbnail_url": (
-            f"/media/projects/{item['id']}/versions/{item['versions'][0]['filename']}"
-            if item.get("versions") else f"/media/projects/{item['id']}/source.png"
+        "thumbnail_url": _browser_image_url(
+            item["id"], item["versions"][0]["id"] if item.get("versions") else "source", "thumbnail"
         ),
     } for item in storage.list_projects()]
 
@@ -271,6 +318,8 @@ async def create_project(name: str = Form(""), image: UploadFile = File(...)):
             thumbnail.thumbnail((160, 160))
             thumbnail.save(folder / "thumbnail.jpg", quality=85)
             project = storage.update_project(project["id"], lambda current: current.update(original_file=original_file, has_alpha=has_alpha))
+            _browser_image(project, "source", "display")
+            _browser_image(project, "source", "thumbnail")
     except HTTPException:
         raise
     except Exception as exc:
@@ -284,6 +333,20 @@ def get_project(project_id: str):
         return storage.public_project(storage.read_project(project_id))
     except FileNotFoundError as exc:
         raise HTTPException(404, "项目不存在") from exc
+
+
+@app.get("/api/projects/{project_id}/browser-image/{image_ref}/{variant}")
+def browser_image(project_id: str, image_ref: str, variant: Literal["display", "thumbnail"]):
+    try:
+        project = storage.read_project(project_id)
+        path = _browser_image(project, image_ref, variant)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "图片不存在") from exc
+    return FileResponse(
+        path,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @app.post("/api/projects/{project_id}/edit-draft")
@@ -812,7 +875,12 @@ def _run_task(project_id: str, task_id: str) -> None:
             "height": int(result.shape[0]),
             "created_at": storage.now_iso(),
         }
-        storage.update_project(project_id, lambda current: current["versions"].insert(0, version))
+        project = storage.update_project(project_id, lambda current: current["versions"].insert(0, version))
+        # Keep the lossless PNG as the export master.  Prebuilding the WebP
+        # derivatives means the canvas and version strip do not each download
+        # and decode another multi-megabyte PNG when the task completes.
+        _browser_image(project, version_id, "display")
+        _browser_image(project, version_id, "thumbnail")
         artifacts = storage.read_task(project_id, task_id).get("artifacts", {})
         artifacts.update({
             "result": f"../../versions/{filename}",
