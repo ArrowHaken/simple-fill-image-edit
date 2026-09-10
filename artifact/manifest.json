@@ -2,7 +2,7 @@
   "schema": "catsco.artifact.v1",
   "id": "catsco-image-edit-workbench",
   "version": "0.1.0",
-  "title": "CatsCo 图片编辑工作台",
+  "title": "CatsCo 图片素材工作台",
   "kind": "mini_app",
   "entrypoint": "http://127.0.0.1:7862/",
   "runtime": {
@@ -20,7 +20,7 @@
   ],
   "providers": {
     "segmentation": "WaveSpeed SAM3",
-    "generation": "CatsCo Image2 native-mask gateway"
+    "generation": "CatsCo Image2 gateway with Dreamina fallback"
   },
   "security": {
     "secretsInBundle": false,

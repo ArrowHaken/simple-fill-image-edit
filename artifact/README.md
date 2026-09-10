@@ -4,7 +4,7 @@
 service-backed mini app。它保留现有的真实链路：
 
 ```text
-上传原图 → SAM3 语义/点选或拖拽框选 → Image2 原生 mask → 安全范围回填 → 版本记录
+上传原图 → SAM3 语义/点选或拖拽框选 → Image2（故障时即梦兜底）→ 安全范围回填 → 版本记录
 ```
 
 Artifact 本身不携带 API key，也不会把图片、任务记录或服务器凭据打进包内。
@@ -21,7 +21,7 @@ $env:CATSCO_MASKED_IMAGE2_BASE_URL = 'https://app.catsco.cc/v1'
 $env:CATSCO_MASKED_IMAGE2_TRANSPORT = 'json-data-url'
 $env:CATSCO_MASKED_IMAGE2_AUTH_SCHEME = 'ApiKey'
 $env:CATSCO_MASKED_IMAGE2_ROUTE_HEADER_NAME = 'X-CatsCo-Image-Provider'
-$env:CATSCO_MASKED_IMAGE2_ROUTE_HEADER_VALUE = 'image2'
+$env:CATSCO_MASKED_IMAGE2_ROUTE_HEADER_VALUE = 'auto'
 $env:CATSCO_MASKED_IMAGE2_API_KEY_FILE = '<runtime-secret-file>'
 python run.py
 ```
@@ -33,7 +33,8 @@ python run.py
 - 用户说“选中/修改/替换/去掉图片中的……”时，先打开本 Artifact。
 - 优先使用短英文对象名调用 SAM3（例如 `glasses`、`book`、`hair`），中文作为界面提示即可。
 - 文字/标题优先使用画布上的“拖拽框选”；完整中文广告文案不是稳定的 SAM3 类别。框选失败时，系统会把矩形作为明确的空间蒙版继续流程。
-- 先确认蒙版覆盖范围，再提交付费 Image2 任务；不要因本地轮询超时立即重复提交。
+- 先确认蒙版覆盖范围，再提交生成任务；Image2 超时、429、5xx 或线路不可用时由网关切换即梦。
+- 即梦任务号会先持久化再轮询；不要因本地轮询超时立即重复提交。
 - 默认参数使用 `dilation=6`、`growth_ratio=0.35`、`feather=3`。
 - 结果由后端在安全编辑范围内回填，范围外像素保持原图；任务页保留 provider 原图和中间产物供复核。
 
