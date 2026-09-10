@@ -193,6 +193,7 @@ class MaskedImage2Tests(unittest.TestCase):
             "masked_image2_base_url": settings.masked_image2_base_url,
             "masked_image2_api_key": settings.masked_image2_api_key,
             "masked_image2_api_key_file": settings.masked_image2_api_key_file,
+            "masked_image2_transport": settings.masked_image2_transport,
         }
         try:
             object.__setattr__(settings, "masked_image2_base_url", f"http://127.0.0.1:{server.server_port}/v1")
@@ -238,6 +239,7 @@ class MaskedImage2Tests(unittest.TestCase):
             object.__setattr__(settings, "masked_image2_base_url", f"http://127.0.0.1:{server.server_port}/v1")
             object.__setattr__(settings, "masked_image2_api_key", "test-only")
             object.__setattr__(settings, "masked_image2_api_key_file", None)
+            object.__setattr__(settings, "masked_image2_transport", "multipart")
             object.__setattr__(settings, "masked_image2_transport", "json-data-url")
             object.__setattr__(settings, "masked_image2_auth_scheme", "ApiKey")
             object.__setattr__(settings, "masked_image2_route_header_name", "X-CatsCo-Image-Provider")
