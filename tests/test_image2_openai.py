@@ -48,6 +48,52 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
+class _AsyncDreaminaHandler(BaseHTTPRequestHandler):
+    get_path = None
+    get_authorization = None
+
+    @staticmethod
+    def _image_payload():
+        image = Image.new("RGB", (1024, 1024), "white")
+        stream = BytesIO()
+        image.save(stream, format="PNG")
+        return {
+            "task_id": "dreamina_test_task",
+            "status": "completed",
+            "provider": "dreamina",
+            "data": [{"b64_json": base64.b64encode(stream.getvalue()).decode("ascii")}],
+        }
+
+    def do_POST(self):
+        length = int(self.headers["Content-Length"])
+        self.rfile.read(length)
+        payload = json.dumps({
+            "task_id": "dreamina_test_task",
+            "status": "processing",
+            "provider": "dreamina",
+        }).encode("utf-8")
+        self.send_response(202)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("X-CatsCo-Image-Provider", "dreamina")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self):
+        type(self).get_path = self.path
+        type(self).get_authorization = self.headers.get("Authorization")
+        payload = json.dumps(self._image_payload()).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("X-CatsCo-Image-Provider", "dreamina")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *_args):
+        pass
+
+
 class MaskedImage2Tests(unittest.TestCase):
     def test_occlusion_masks_protect_foreground_and_allow_new_shape(self):
         target = np.zeros((40, 40), dtype=np.uint8)
@@ -214,6 +260,52 @@ class MaskedImage2Tests(unittest.TestCase):
             self.assertTrue(payload["mask"].startswith("data:image/png;base64,"))
             self.assertEqual(_Handler.headers_seen["Authorization"], "ApiKey test-only")
             self.assertEqual(_Handler.headers_seen["X-CatsCo-Image-Provider"], "image2")
+        finally:
+            server.shutdown()
+            server.server_close()
+            for name, value in old.items():
+                object.__setattr__(settings, name, value)
+
+    def test_catsco_gateway_polls_async_dreamina_fallback(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _AsyncDreaminaHandler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old = {
+            "masked_image2_base_url": settings.masked_image2_base_url,
+            "masked_image2_api_key": settings.masked_image2_api_key,
+            "masked_image2_api_key_file": settings.masked_image2_api_key_file,
+            "masked_image2_transport": settings.masked_image2_transport,
+            "masked_image2_auth_scheme": settings.masked_image2_auth_scheme,
+            "masked_image2_route_header_name": settings.masked_image2_route_header_name,
+            "masked_image2_route_header_value": settings.masked_image2_route_header_value,
+            "masked_image2_poll_interval": settings.masked_image2_poll_interval,
+            "masked_image2_async_timeout": settings.masked_image2_async_timeout,
+        }
+        try:
+            object.__setattr__(settings, "masked_image2_base_url", f"http://127.0.0.1:{server.server_port}/v1")
+            object.__setattr__(settings, "masked_image2_api_key", "test-only")
+            object.__setattr__(settings, "masked_image2_api_key_file", None)
+            object.__setattr__(settings, "masked_image2_transport", "json-data-url")
+            object.__setattr__(settings, "masked_image2_auth_scheme", "ApiKey")
+            object.__setattr__(settings, "masked_image2_route_header_name", "X-CatsCo-Image-Provider")
+            object.__setattr__(settings, "masked_image2_route_header_value", "auto")
+            object.__setattr__(settings, "masked_image2_poll_interval", 0.01)
+            object.__setattr__(settings, "masked_image2_async_timeout", 5)
+            with TemporaryDirectory() as folder:
+                root = Path(folder)
+                source = root / "source.png"
+                Image.new("RGB", (512, 512), "gray").save(source)
+                mask = np.zeros((512, 512), dtype=np.uint8)
+                mask[180:330, 180:330] = 255
+                output, record = run_masked_image2(
+                    source, mask, "一只白猫", root, lambda *_args: None,
+                )
+                self.assertTrue(output.is_file())
+                self.assertEqual(record["provider"], "dreamina-image-edit-fallback")
+                self.assertTrue(record["fallback_used"])
+                self.assertEqual(record["async_task_id"], "dreamina_test_task")
+            self.assertEqual(_AsyncDreaminaHandler.get_path, "/v1/tasks/dreamina_test_task")
+            self.assertEqual(_AsyncDreaminaHandler.get_authorization, "ApiKey test-only")
         finally:
             server.shutdown()
             server.server_close()

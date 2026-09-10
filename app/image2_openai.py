@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Callable
 import base64
 import json
-from urllib.parse import urlparse
+import time
+from urllib.parse import quote, urlparse, urlunparse
 
 import numpy as np
 import requests
@@ -52,7 +53,7 @@ def build_alpha_mask(mask: np.ndarray) -> Image.Image:
     return Image.fromarray(rgba)
 
 
-def _decode_result(response: requests.Response, task_dir: Path) -> Path:
+def _response_payload(response: requests.Response) -> dict:
     try:
         payload = response.json()
     except ValueError as exc:
@@ -64,10 +65,18 @@ def _decode_result(response: requests.Response, task_dir: Path) -> Path:
         if isinstance(message, dict):
             message = message.get("message") or json.dumps(message, ensure_ascii=False)
         raise RuntimeError(f"原生 mask Image2 HTTP {response.status_code}: {message}")
+    if not isinstance(payload, dict):
+        raise RuntimeError("原生 mask Image2 返回了无效的 JSON 对象")
+    return payload
+
+
+def _write_result(payload: dict, task_dir: Path) -> Path | None:
     data = payload.get("data") or []
     if not data:
-        raise RuntimeError("原生 mask Image2 结果缺少 data[0]")
+        return None
     item = data[0]
+    if not isinstance(item, dict):
+        raise RuntimeError("图片生成结果 data[0] 格式无效")
     output = task_dir / "image2-native-mask-provider-original.png"
     if item.get("b64_json"):
         try:
@@ -85,6 +94,84 @@ def _decode_result(response: requests.Response, task_dir: Path) -> Path:
     downloaded.raise_for_status()
     output.write_bytes(downloaded.content)
     return output
+
+
+def _task_endpoint(task_id: str) -> str:
+    parsed = urlparse(_endpoint())
+    prefix = parsed.path.rsplit("/images/edits", 1)[0].rstrip("/")
+    path = f"{prefix}/tasks/{quote(task_id, safe='')}"
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def _decode_result(
+    response: requests.Response,
+    task_dir: Path,
+    progress: Progress,
+) -> tuple[Path, dict]:
+    payload = _response_payload(response)
+    output = _write_result(payload, task_dir)
+    if output is not None:
+        return output, payload
+
+    task_id = str(payload.get("task_id") or "").strip()
+    if not task_id:
+        raise RuntimeError("图片生成结果既没有图片，也没有可恢复的 task_id")
+
+    pending_path = task_dir / "image-provider-pending-task.json"
+    pending_path.write_text(json.dumps({
+        "task_id": task_id,
+        "provider": str(payload.get("provider") or "dreamina"),
+    }, ensure_ascii=False), encoding="utf-8")
+
+    deadline = time.monotonic() + settings.masked_image2_async_timeout
+    poll_interval = max(0.25, settings.masked_image2_poll_interval)
+    progress("Image2 不可用，已切换即梦；正在等待结果", 58)
+    while time.monotonic() < deadline:
+        poll_response = requests.get(
+            _task_endpoint(task_id),
+            headers={**_auth_headers(), "Accept": "application/json"},
+            timeout=min(settings.masked_image2_timeout, 120),
+        )
+        poll_payload = _response_payload(poll_response)
+        output = _write_result(poll_payload, task_dir)
+        if output is not None:
+            pending_path.unlink(missing_ok=True)
+            return output, poll_payload
+        status = str(poll_payload.get("status") or "").strip().lower()
+        if status in {"failed", "error", "cancelled", "canceled"}:
+            detail = poll_payload.get("error") or poll_payload
+            raise RuntimeError(
+                "即梦 fallback 生成失败："
+                + (detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False))
+            )
+        time.sleep(poll_interval)
+    raise RuntimeError(
+        f"即梦 fallback 等待超过 {settings.masked_image2_async_timeout} 秒；"
+        f"任务 {task_id} 已保留，可稍后恢复"
+    )
+
+
+def _resume_pending_result(task_dir: Path, progress: Progress) -> tuple[Path, dict] | None:
+    pending_path = task_dir / "image-provider-pending-task.json"
+    if not pending_path.is_file():
+        return None
+    try:
+        pending = json.loads(pending_path.read_text(encoding="utf-8"))
+        task_id = str(pending.get("task_id") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        pending_path.unlink(missing_ok=True)
+        return None
+    if not task_id:
+        pending_path.unlink(missing_ok=True)
+        return None
+
+    progress("正在恢复已提交的即梦任务，不会重复扣费", 48)
+    response = requests.get(
+        _task_endpoint(task_id),
+        headers={**_auth_headers(), "Accept": "application/json"},
+        timeout=min(settings.masked_image2_timeout, 120),
+    )
+    return _decode_result(response, task_dir, progress)
 
 
 def _auth_headers() -> dict[str, str]:
@@ -132,6 +219,23 @@ def run_masked_image2(
     progress: Progress,
 ) -> tuple[Path, dict]:
     key = _api_key()
+    resumed_result = _resume_pending_result(task_dir, progress)
+    if resumed_result is not None:
+        output, result_payload = resumed_result
+        progress("已恢复即梦 fallback 结果", 82)
+        return output, {
+            "provider": "dreamina-image-edit-fallback",
+            "endpoint_origin": urlparse(_endpoint()).netloc,
+            "endpoint_path": urlparse(_endpoint()).path,
+            "model": settings.masked_image2_model,
+            "request_id": None,
+            "async_task_id": result_payload.get("task_id"),
+            "fallback_used": True,
+            "resumed_async_task": True,
+            "transport": settings.masked_image2_transport,
+            "route_header": None,
+            "mask_semantics": "transparent_pixels_are_editable",
+        }
     with Image.open(source) as image:
         source_png = image.convert("RGBA")
     if mask.shape != (source_png.height, source_png.width):
@@ -188,14 +292,23 @@ def run_masked_image2(
             timeout=settings.masked_image2_timeout,
         )
     request_id = response.headers.get("x-request-id")
-    output = _decode_result(response, task_dir)
-    progress("Image2 原生蒙版结果已返回", 82)
+    selected_provider = response.headers.get("X-CatsCo-Image-Provider", "").strip().lower()
+    output, result_payload = _decode_result(response, task_dir, progress)
+    used_dreamina = selected_provider == "dreamina" or str(
+        result_payload.get("provider") or ""
+    ).strip().lower() == "dreamina"
+    progress("即梦 fallback 结果已返回" if used_dreamina else "Image2 原生蒙版结果已返回", 82)
     return output, {
-        "provider": "gpt-image-2-native-mask",
+        "provider": (
+            "dreamina-image-edit-fallback"
+            if used_dreamina else "gpt-image-2-native-mask"
+        ),
         "endpoint_origin": urlparse(_endpoint()).netloc,
         "endpoint_path": urlparse(_endpoint()).path,
         "model": settings.masked_image2_model,
         "request_id": request_id,
+        "async_task_id": result_payload.get("task_id"),
+        "fallback_used": used_dreamina,
         "transport": settings.masked_image2_transport,
         "route_header": (
             f"{settings.masked_image2_route_header_name}:"

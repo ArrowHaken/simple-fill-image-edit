@@ -2,7 +2,7 @@
 
 这是 `simple-fill-image-edit` 在简化封装之前的完整实验实现，保留三条真实运行分支：
 
-- `simple_fill`：语义/空间蒙版 → 安全生成范围 → Image2 原生 mask → 完整候选回填。
+- `simple_fill`：语义/空间蒙版 → 安全生成范围 → Image2 原生 mask（失败时即梦参考图编辑）→ 完整候选回填。
 - `legacy / fill_anything`：可对生成结果再次 SAM3，再构造语义提交区域。
 - `object_v2`：Big-LaMa clean plate、前景保护、结果对象分割、trimap/alpha 合成。
 

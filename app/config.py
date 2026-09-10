@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
 import os
@@ -48,6 +50,12 @@ class Settings:
         os.getenv("IMAGE_MODEL", "gpt-image-2"),
     )
     masked_image2_timeout: int = int(os.getenv("CATSCO_MASKED_IMAGE2_TIMEOUT", "600"))
+    masked_image2_poll_interval: float = float(os.getenv(
+        "CATSCO_MASKED_IMAGE2_POLL_INTERVAL", "3",
+    ))
+    masked_image2_async_timeout: int = int(os.getenv(
+        "CATSCO_MASKED_IMAGE2_ASYNC_TIMEOUT", "1800",
+    ))
     masked_image2_image_field: str = os.getenv(
         "CATSCO_MASKED_IMAGE2_IMAGE_FIELD",
         os.getenv("IMAGE_FIELD", "image[]"),

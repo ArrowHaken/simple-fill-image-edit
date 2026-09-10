@@ -64,7 +64,7 @@ async function checkHealth() {
       [health.wavespeed_key_ready, "SAM3 · WaveSpeed"],
       [health.image2_native_mask_ready || health.image2_ssh_key_ready,
         health.image2_native_mask_ready
-          ? (health.image2_native_mask_route === "catsco-gateway" ? "Image2 · CatsCo 原生蒙版" : "Image2 · 原生蒙版")
+          ? (health.image2_native_mask_route === "catsco-gateway" ? "Image2 · 即梦自动兜底" : "Image2 · 原生蒙版")
           : "Image2 · 参考图兼容"],
     ];
     $("#healthBadges").innerHTML = items.map(([ok, text]) => `<span class="badge ${ok ? "" : "warn"}"><i></i>${text}</span>`).join("");
@@ -158,7 +158,9 @@ function taskCard(task) {
   const retry = ["failed", "completed"].includes(task.status) ? `<button data-retry="${task.id}">重新执行</button>` : "";
   const detail = task.error ? friendlyError(task.error) : task.stage;
   const pipeline = task.pipeline_mode === "simple_fill" ? "Simple Fill" : task.pipeline_mode === "object_v2" ? "V2" : "Legacy";
-  return `<article class="task-card"><header><b>${pipeline} · ${shortId(task.id)}</b><span class="status-${task.status}">${statusName(task.status)}</span></header><p>${escapeHtml(detail || "")}</p><footer>${resultLink}${cleanPlateLink}${candidateLink}${resultMaskLink}${alphaLink}${qualityLink}${providerLink}${resume}${retry}</footer></article>`;
+  const provider = task.artifacts?.provider_record?.provider;
+  const providerText = provider === "dreamina-image-edit-fallback" ? "即梦兜底" : provider ? "Image2" : "";
+  return `<article class="task-card"><header><b>${pipeline} · ${shortId(task.id)}${providerText ? ` · ${providerText}` : ""}</b><span class="status-${task.status}">${statusName(task.status)}</span></header><p>${escapeHtml(detail || "")}</p><footer>${resultLink}${cleanPlateLink}${candidateLink}${resultMaskLink}${alphaLink}${qualityLink}${providerLink}${resume}${retry}</footer></article>`;
 }
 
 async function selectSource(sourceRef, url) {

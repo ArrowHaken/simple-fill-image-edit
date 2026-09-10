@@ -42,6 +42,10 @@ def capabilities():
         "generation_reason": "" if direct or ssh else "图片生成服务尚未配置，仍可上传图片、框选和保存草稿。",
         "semantic_reason": "" if settings.wavespeed_key_ready else "智能选区尚未配置，请使用手动框选。",
         "generation_route": "direct" if direct else "ssh" if ssh else "unavailable",
+        "generation_provider_policy": (
+            (settings.masked_image2_route_header_value or "image2")
+            if direct else "image2"
+        ),
         "prompt_limit": 32,
     }
 
