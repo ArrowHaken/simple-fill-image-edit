@@ -10,3 +10,11 @@ third_party/inpaint_anything_mask_processing.py
 
 The copy removes unused plotting and demonstration code. The crop and restore
 algorithm remains attributable to the upstream project.
+
+The v16 interface bundles Inter Variable and Noto Sans SC Variable from the
+existing CatsCo frontend's Fontsource packages. Both are licensed under the
+SIL Open Font License 1.1. Original license and copyright notices are included:
+app/static/assets/fonts/inter/LICENSE
+app/static/assets/fonts/noto-sans-sc/LICENSE
+
+The CatsCo brand mark is reused from the supplied local CatsCo application.

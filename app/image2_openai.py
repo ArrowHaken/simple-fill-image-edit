@@ -1,0 +1,323 @@
+from __future__ import annotations
+
+from io import BytesIO
+from pathlib import Path
+from typing import Callable
+import base64
+import json
+import time
+from urllib.parse import quote, urlparse, urlunparse
+
+import numpy as np
+import requests
+from PIL import Image
+
+from .config import settings
+
+
+Progress = Callable[[str, int], None]
+
+
+def _api_key() -> str:
+    if settings.masked_image2_api_key:
+        return settings.masked_image2_api_key
+    path = settings.masked_image2_api_key_file
+    if path and path.is_file():
+        return path.read_text(encoding="utf-8").strip()
+    raise RuntimeError(
+        "原生 mask Image2 尚未配置 API Key；请设置 "
+        "CATSCO_MASKED_IMAGE2_API_KEY 或 CATSCO_MASKED_IMAGE2_API_KEY_FILE"
+    )
+
+
+def _endpoint() -> str:
+    value = settings.masked_image2_base_url.rstrip("/")
+    if value.endswith("/images/edits"):
+        endpoint = value
+    else:
+        endpoint = f"{value}/images/edits"
+    parsed = urlparse(endpoint)
+    if parsed.scheme == "https":
+        return endpoint
+    if parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
+        return endpoint
+    raise RuntimeError("原生 mask Image2 接口必须使用 HTTPS；仅本机回环地址允许 HTTP")
+
+
+def build_alpha_mask(mask: np.ndarray) -> Image.Image:
+    """Convert IA white=edit mask to OpenAI transparent=edit RGBA mask."""
+    binary = np.where(mask >= 127, 255, 0).astype(np.uint8)
+    alpha = 255 - binary
+    rgba = np.full((binary.shape[0], binary.shape[1], 4), 255, dtype=np.uint8)
+    rgba[:, :, 3] = alpha
+    return Image.fromarray(rgba)
+
+
+def _response_payload(response: requests.Response) -> dict:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"原生 mask Image2 返回非 JSON（HTTP {response.status_code}）"
+        ) from exc
+    if not response.ok:
+        message = payload.get("error", payload)
+        if isinstance(message, dict):
+            message = message.get("message") or json.dumps(message, ensure_ascii=False)
+        raise RuntimeError(f"原生 mask Image2 HTTP {response.status_code}: {message}")
+    if not isinstance(payload, dict):
+        raise RuntimeError("原生 mask Image2 返回了无效的 JSON 对象")
+    return payload
+
+
+def _write_result(payload: dict, task_dir: Path) -> Path | None:
+    data = payload.get("data") or []
+    if not data:
+        return None
+    item = data[0]
+    if not isinstance(item, dict):
+        raise RuntimeError("图片生成结果 data[0] 格式无效")
+    output = task_dir / "image2-native-mask-provider-original.png"
+    if item.get("b64_json"):
+        try:
+            output.write_bytes(base64.b64decode(item["b64_json"], validate=True))
+        except Exception as exc:
+            raise RuntimeError("原生 mask Image2 返回了无效的 b64_json") from exc
+        return output
+    url = item.get("url")
+    if not url:
+        raise RuntimeError("原生 mask Image2 结果既没有 b64_json 也没有 url")
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise RuntimeError("原生 mask Image2 返回了不安全的结果 URL")
+    downloaded = requests.get(url, timeout=120)
+    downloaded.raise_for_status()
+    output.write_bytes(downloaded.content)
+    return output
+
+
+def _task_endpoint(task_id: str) -> str:
+    parsed = urlparse(_endpoint())
+    prefix = parsed.path.rsplit("/images/edits", 1)[0].rstrip("/")
+    path = f"{prefix}/tasks/{quote(task_id, safe='')}"
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def _decode_result(
+    response: requests.Response,
+    task_dir: Path,
+    progress: Progress,
+) -> tuple[Path, dict]:
+    payload = _response_payload(response)
+    output = _write_result(payload, task_dir)
+    if output is not None:
+        return output, payload
+
+    task_id = str(payload.get("task_id") or "").strip()
+    if not task_id:
+        raise RuntimeError("图片生成结果既没有图片，也没有可恢复的 task_id")
+
+    pending_path = task_dir / "image-provider-pending-task.json"
+    pending_path.write_text(json.dumps({
+        "task_id": task_id,
+        "provider": str(payload.get("provider") or "dreamina"),
+    }, ensure_ascii=False), encoding="utf-8")
+
+    deadline = time.monotonic() + settings.masked_image2_async_timeout
+    poll_interval = max(0.25, settings.masked_image2_poll_interval)
+    progress("Image2 不可用，已切换即梦；正在等待结果", 58)
+    while time.monotonic() < deadline:
+        poll_response = requests.get(
+            _task_endpoint(task_id),
+            headers={**_auth_headers(), "Accept": "application/json"},
+            timeout=min(settings.masked_image2_timeout, 120),
+        )
+        poll_payload = _response_payload(poll_response)
+        output = _write_result(poll_payload, task_dir)
+        if output is not None:
+            pending_path.unlink(missing_ok=True)
+            return output, poll_payload
+        status = str(poll_payload.get("status") or "").strip().lower()
+        if status in {"failed", "error", "cancelled", "canceled"}:
+            detail = poll_payload.get("error") or poll_payload
+            raise RuntimeError(
+                "即梦 fallback 生成失败："
+                + (detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False))
+            )
+        time.sleep(poll_interval)
+    raise RuntimeError(
+        f"即梦 fallback 等待超过 {settings.masked_image2_async_timeout} 秒；"
+        f"任务 {task_id} 已保留，可稍后恢复"
+    )
+
+
+def _resume_pending_result(task_dir: Path, progress: Progress) -> tuple[Path, dict] | None:
+    pending_path = task_dir / "image-provider-pending-task.json"
+    if not pending_path.is_file():
+        return None
+    try:
+        pending = json.loads(pending_path.read_text(encoding="utf-8"))
+        task_id = str(pending.get("task_id") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        pending_path.unlink(missing_ok=True)
+        return None
+    if not task_id:
+        pending_path.unlink(missing_ok=True)
+        return None
+
+    progress("正在恢复已提交的即梦任务，不会重复扣费", 48)
+    response = requests.get(
+        _task_endpoint(task_id),
+        headers={**_auth_headers(), "Accept": "application/json"},
+        timeout=min(settings.masked_image2_timeout, 120),
+    )
+    return _decode_result(response, task_dir, progress)
+
+
+def _auth_headers() -> dict[str, str]:
+    return {"Authorization": f"{settings.masked_image2_auth_scheme} {_api_key()}"}
+
+
+def _run_json_gateway(
+    endpoint: str,
+    source_payload: bytes,
+    mask_payload: bytes,
+    prompt: str,
+    source_size: tuple[int, int],
+    task_dir: Path,
+) -> requests.Response:
+    payload = {
+        "model": settings.masked_image2_model,
+        "prompt": (
+            "完全替换透明蒙版内的原始对象，蒙版内不得保留原始对象的任何可见部分；"
+            "只修改透明蒙版指定的局部区域，保留其余构图、人物、姿态、透视、"
+            "光照和视觉关系。让修改内容在边界处与原图自然衔接。"
+            f"目标内容：{prompt.strip()}"
+        ),
+        "images": [{
+            "image_url": "data:image/png;base64,"
+            + base64.b64encode(source_payload).decode("ascii"),
+        }],
+        "mask": "data:image/png;base64,"
+        + base64.b64encode(mask_payload).decode("ascii"),
+        "n": 1,
+        "size": f"{source_size[0]}x{source_size[1]}",
+        "quality": "high",
+        "output_format": "png",
+    }
+    headers = {**_auth_headers(), "Content-Type": "application/json"}
+    if settings.masked_image2_route_header_name and settings.masked_image2_route_header_value:
+        headers[settings.masked_image2_route_header_name] = settings.masked_image2_route_header_value
+    return requests.post(endpoint, headers=headers, json=payload, timeout=settings.masked_image2_timeout)
+
+
+def run_masked_image2(
+    source: Path,
+    mask: np.ndarray,
+    prompt: str,
+    task_dir: Path,
+    progress: Progress,
+) -> tuple[Path, dict]:
+    key = _api_key()
+    resumed_result = _resume_pending_result(task_dir, progress)
+    if resumed_result is not None:
+        output, result_payload = resumed_result
+        progress("已恢复即梦 fallback 结果", 82)
+        return output, {
+            "provider": "dreamina-image-edit-fallback",
+            "endpoint_origin": urlparse(_endpoint()).netloc,
+            "endpoint_path": urlparse(_endpoint()).path,
+            "model": settings.masked_image2_model,
+            "request_id": None,
+            "async_task_id": result_payload.get("task_id"),
+            "fallback_used": True,
+            "resumed_async_task": True,
+            "transport": settings.masked_image2_transport,
+            "route_header": None,
+            "mask_semantics": "transparent_pixels_are_editable",
+        }
+    with Image.open(source) as image:
+        source_png = image.convert("RGBA")
+    if mask.shape != (source_png.height, source_png.width):
+        raise RuntimeError("原生 mask Image2 的底图与蒙版尺寸不一致")
+    original_size = source_png.size
+    # GPT Image 2 currently requires at least 655,360 output pixels. IA's
+    # upstream Fill Anything window is exactly 512x512, so use a 1024x1024
+    # transport canvas and map the provider result back to the IA window.
+    provider_size = original_size
+    if source_png.width * source_png.height < 655_360:
+        provider_size = (1024, 1024)
+        source_png = source_png.resize(provider_size, Image.Resampling.LANCZOS)
+        mask = np.asarray(
+            Image.fromarray(mask).resize(provider_size, Image.Resampling.NEAREST),
+            dtype=np.uint8,
+        )
+    alpha_mask = build_alpha_mask(mask)
+    source_bytes = BytesIO()
+    mask_bytes = BytesIO()
+    source_png.save(source_bytes, format="PNG")
+    alpha_mask.save(mask_bytes, format="PNG")
+    source_payload = source_bytes.getvalue()
+    mask_payload = mask_bytes.getvalue()
+    mask_path = task_dir / "image2-native-alpha-mask.png"
+    mask_path.write_bytes(mask_payload)
+
+    progress("正在提交 Image2 原生透明蒙版编辑", 46)
+    endpoint = _endpoint()
+    if settings.masked_image2_transport in {"json", "json-data-url", "catsco-json"}:
+        response = _run_json_gateway(
+            endpoint, source_payload, mask_payload, prompt,
+            (source_png.width, source_png.height), task_dir,
+        )
+    else:
+        response = requests.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {key}"},
+            data={
+                "model": settings.masked_image2_model,
+                "prompt": (
+                    "完全替换透明蒙版内的原始对象，蒙版内不得保留原始对象的任何可见部分；"
+                    "只修改透明蒙版指定的局部区域，保留其余构图、人物、姿态、透视、"
+                    "光照和像素级视觉关系。让修改内容在边界处与原图自然衔接。"
+                    f"目标内容：{prompt.strip()}"
+                ),
+                "size": f"{source_png.width}x{source_png.height}",
+                "quality": "high",
+                "output_format": "png",
+            },
+            files={
+                settings.masked_image2_image_field: ("source.png", source_payload, "image/png"),
+                "mask": ("mask.png", mask_payload, "image/png"),
+            },
+            timeout=settings.masked_image2_timeout,
+        )
+    request_id = response.headers.get("x-request-id")
+    selected_provider = response.headers.get("X-CatsCo-Image-Provider", "").strip().lower()
+    output, result_payload = _decode_result(response, task_dir, progress)
+    used_dreamina = selected_provider == "dreamina" or str(
+        result_payload.get("provider") or ""
+    ).strip().lower() == "dreamina"
+    progress("即梦 fallback 结果已返回" if used_dreamina else "Image2 原生蒙版结果已返回", 82)
+    return output, {
+        "provider": (
+            "dreamina-image-edit-fallback"
+            if used_dreamina else "gpt-image-2-native-mask"
+        ),
+        "endpoint_origin": urlparse(_endpoint()).netloc,
+        "endpoint_path": urlparse(_endpoint()).path,
+        "model": settings.masked_image2_model,
+        "request_id": request_id,
+        "async_task_id": result_payload.get("task_id"),
+        "fallback_used": used_dreamina,
+        "transport": settings.masked_image2_transport,
+        "route_header": (
+            f"{settings.masked_image2_route_header_name}:"
+            f"{settings.masked_image2_route_header_value}"
+            if settings.masked_image2_route_header_name and settings.masked_image2_route_header_value
+            else None
+        ),
+        "mask_semantics": "transparent_pixels_are_editable",
+        "mask_file": mask_path.name,
+        "ia_window_size": list(original_size),
+        "provider_input_size": list(provider_size),
+    }

@@ -1,0 +1,23 @@
+# Reference: installed development dependency versions, 2026-09-07
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+charset-normalizer==3.5.1
+click==8.5.0
+fastapi==0.116.1
+h11==0.16.0
+idna==3.19
+numpy==1.26.4
+opencv-python==4.11.0.86
+pillow==11.3.0
+pip==25.0.1
+pycocotools==2.0.10
+pydantic==2.11.7
+pydantic_core==2.33.2
+python-multipart==0.0.20
+requests==2.32.5
+starlette==0.47.3
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.7.0
+uvicorn==0.35.0

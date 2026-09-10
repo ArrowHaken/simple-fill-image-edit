@@ -1,114 +1,53 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Simple Fill · 语义局部重绘</title>
-  <link rel="stylesheet" href="/static/styles.css">
-</head>
+<html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#fcfcfc"><title>CatsCo · 图片素材工作台</title><link rel="preload" href="static/assets/fonts/inter/files/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="static/assets/fonts/inter/wght.css"><link rel="stylesheet" href="static/assets/fonts/noto-sans-sc/wght.css"><link rel="stylesheet" href="static/catsco-light-tokens.css?v=36"><link rel="stylesheet" href="static/styles.css?v=36"></head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark">S</span>
-      <div><strong>Simple Fill 语义局部重绘</strong><small>SAM3 · IMAGE EDIT · INPAINT ANYTHING</small></div>
-    </div>
-    <div class="project-title" id="projectTitle">尚未打开项目</div>
-    <div class="health" id="healthBadges">
-      <span class="badge muted"><i></i>正在检查运行环境</span>
-    </div>
-  </header>
-
-  <main class="workspace">
-    <aside class="panel controls">
-      <section class="section new-project">
-        <div class="section-head"><h2>开始一张图</h2><span>自动保存</span></div>
-        <label class="field compact"><span>项目名称</span><input id="projectName" placeholder="例如：夏季海报局部调整"></label>
-        <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
-        <button class="upload" id="uploadButton">
-          <span class="upload-icon">↥</span><span><b>上传原图</b><small>PNG / JPG / WEBP · 最高 200 MiB</small></span>
-        </button>
-      </section>
-
-      <section class="section disabled" id="editControls">
-        <div class="section-head"><h2>1 · 框住要修改的区域</h2><button class="text-button hidden" id="clearSelection">清除框选</button></div>
-        <p class="hint">在中间图片上按住拖动。默认直接使用框选范围；需要贴合物体轮廓时，再让 SAM3 智能处理。</p>
-        <div class="selection-summary" id="selectionSummary">尚未框选 · 拖动图片即可开始</div>
-        <label class="field"><span>对象名称 <em>可选，仅用于语义识别</em></span><input id="segmentPrompt" maxlength="64" placeholder="例如：书、花瓶、眼镜"></label>
-        <div class="selection-actions">
-          <button class="secondary direct-region" id="directRegionButton" disabled>直接使用框选</button>
-          <button class="secondary" id="segmentButton">SAM3 智能贴边</button>
-        </div>
-        <p class="hint selection-footnote">没有框时，也可以只输入对象名称，再点 SAM3 语义识别。</p>
-        <div class="mask-summary" id="maskSummary"><span>尚未生成蒙版</span></div>
-        <div class="mask-role hidden" id="maskRoleControls">
-          <button class="role-target" id="setTargetMask">设为修改目标</button>
-          <button id="addProtectMask">加入前景保护</button>
-        </div>
-        <div class="layer-summary hidden" id="layerSummary"></div>
-      </section>
-
-      <section class="section disabled" id="actionControls">
-        <div class="section-head"><h2>2 · 想把它变成什么</h2></div>
-        <div class="action-grid">
-          <button class="action active" data-operation="fill"><span>✦</span><b>语义局部重绘</b><small>原生蒙版接口一次完成替换</small></button>
-        </div>
-        <label class="field prompt-field" id="promptField"><span>生成要求</span><textarea id="generationPrompt" rows="3" placeholder="例如：把书完整替换成一只被双手自然抱住的白色长毛猫，保持其他内容不变"></textarea></label>
-        <label class="field hidden" id="resultObjectField"><span>结果对象</span><input id="resultObjectPrompt" maxlength="32"></label>
-        <div class="occlusion-summary hidden" id="occlusionSummary"></div>
-        <details class="advanced">
-          <summary><span>边缘与专业设置</span><small>默认通常最好</small></summary>
-          <label class="field"><span>新对象可用空间</span><select id="growthMode"><option value="0.15" selected>自动安全留白 · 推荐</option><option value="0">严格限制在框内</option><option value="0.35">明显更大的新对象</option><option value="0.65">超大生成范围</option></select></label>
-          <label class="range-field"><span>清除旧边缘 <output id="dilationOutput">6 px</output></span><input id="dilation" type="range" min="0" max="24" value="6"></label>
-          <label class="range-field"><span>最外侧接缝 <output id="featherOutput">3 px</output></span><input id="feather" type="range" min="0" max="8" value="3"></label>
-          <label class="range-field hidden"><span>旧物清理外扩 <output id="cleanupRadiusOutput">10 px</output></span><input id="cleanupRadius" type="range" min="0" max="24" value="10"></label>
-          <label class="range-field hidden"><span>语义软边宽度 <output id="semanticEdgeOutput">6 px</output></span><input id="semanticEdge" type="range" min="0" max="16" value="6"></label>
-          <button class="text-button protect-clear hidden" id="clearProtection" type="button">清空全部前景保护</button>
-          <p>“自动安全留白”会在框外预留约 15% 空间，避免猫耳、镜框等新内容被裁断；文字替换等严格区域可选择“严格限制在框内”。</p>
-        </details>
-        <div class="v2-contract"><i></i><span>固定函数链路</span><b>框选 / SAM3 → Native Mask Edit → 原位回填</b></div>
-        <button class="primary full" id="generateButton"><span>生成局部修改</span><small id="generateProvider">原生 mask 图像编辑</small></button>
-      </section>
-    </aside>
-
-    <section class="stage-column">
-      <div class="stage-toolbar">
-        <div class="source-label"><i></i><span id="sourceLabel">等待图片</span></div>
-        <div class="stage-actions">
-          <button id="showSource" disabled>查看源图</button>
-          <button id="fitCanvas" disabled>适合窗口</button>
-          <a id="downloadCurrent" class="button-link disabled">下载当前图</a>
-        </div>
-      </div>
-      <div class="stage" id="stage">
-        <div class="empty-state" id="emptyState">
-          <div class="empty-glyph"><span></span></div>
-          <h1>框住一个区域，<br>只修改你想改的部分。</h1>
-          <p>上传图片后直接拖动框选；需要时再用 SAM3 智能贴边。</p>
-        </div>
-        <canvas id="stageCanvas" class="hidden"></canvas>
-        <div class="stage-note hidden" id="stageNote">按住拖动框选 · 框外像素保持不变</div>
-      </div>
-      <div class="task-progress hidden" id="taskProgress">
-        <div class="progress-copy"><span id="taskStage">准备任务</span><strong id="taskPercent">0%</strong></div>
-        <div class="progress-track"><i id="progressBar"></i></div>
-        <p id="taskDetail">任务记录与中间文件会持续保存，可以切换项目后再回来查看。</p>
-      </div>
-      <div class="filmstrip">
-        <div class="filmstrip-head"><h3>本项目版本</h3><span><b id="versionCount">0 个结果</b> · 点击任一版本继续编辑</span></div>
-        <div class="version-list" id="versionList"><p class="quiet">完成一次修改后，结果会出现在这里。</p></div>
-      </div>
+<a class="skip-link" href="#stage">跳到画布</a>
+<header class="topbar">
+ <a class="brand" href="./" aria-label="CatsCo 图片素材工作台首页"><span class="brand-copy"><b translate="no">CatsCo</b><small>图片素材工作台</small></span></a>
+ <nav class="top-actions" aria-label="工作台操作"><button id="newProject" class="quiet-button">新建</button><button id="openProjects">项目</button><button id="openSettings" class="status-button hidden" title="服务状态"><i></i><span>服务</span></button><button id="exportCurrent" disabled><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg>导出</button></nav>
+</header>
+<main class="workspace" id="workspace">
+ <aside class="editor" id="editor" aria-label="修改设置">
+  <div class="editor-head"><h1>局部修改</h1><button id="closeEditor" class="quiet-button mobile-only">返回画布</button></div>
+  <div class="editor-scroll">
+   <div id="editorIntro" class="intro"><p>上传图片，开始局部修改。</p><button id="sideUpload" class="secondary full">选择图片</button></div>
+   <div id="editFields" class="hidden">
+    <section class="edit-section"><div class="section-title"><h2><svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H4a1 1 0 0 0-1 1v4m13-5h4a1 1 0 0 1 1 1v4M3 16v4a1 1 0 0 0 1 1h4m8 0h4a1 1 0 0 0 1-1v-4"/></svg> 选择修改区域</h2></div>
+     <div class="segmented" role="group" aria-label="选择区域的方式"><button data-mode="box" aria-pressed="true">框选</button><button data-mode="point" aria-pressed="false">点击对象</button><button data-mode="text" aria-pressed="false">输入名称</button></div>
+     <p id="selectionHint" class="helper">在画布上拖出一个框，选区会自动保存。</p>
+     <div id="pointOptions" class="hidden"><div class="segmented" role="group" aria-label="选点类型"><button data-point="1" aria-pressed="true">添加目标</button><button data-point="0" aria-pressed="false">排除误选</button></div></div>
+     <label id="targetField" class="field hidden"><span class="sr-only">要选择的对象，最多32字</span><input id="segmentPrompt" maxlength="32" placeholder="例如：红色杯子" autocomplete="off"></label>
+     <button id="segmentButton" class="secondary full hidden">识别对象</button><p id="selectionError" class="inline-error hidden" role="alert"></p><div id="maskSummary" class="selection-summary" role="status">尚未选择修改区域</div>
     </section>
+    <section class="edit-section"><div class="section-title"><h2><svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 3 5 5M4 20l4-1L21 6a2 2 0 0 0-4-4L4 15z"/></svg> 描述修改</h2></div><label class="field"><span class="sr-only">修改要求</span><textarea id="generationPrompt" rows="4" maxlength="6000" placeholder="例如：把杯子换成白色陶瓷杯"></textarea></label><p id="promptError" class="inline-error hidden" role="alert"></p><div class="prompt-examples" aria-label="快速填入修改要求"><button data-example="替换对象">替换对象</button><button data-example="移除内容">移除内容</button><button data-example="修改文字">修改文字</button></div><button id="undoPrompt" class="text-button prompt-undo hidden" type="button">撤销填入</button></section>
+    <details class="range-settings" id="rangeSettings"><summary>更多设置</summary><div class="field"><span id="growthLabel">外扩范围</span><button id="growthTrigger" class="range-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="growthMenu" aria-labelledby="growthLabel growthValue"><span id="growthValue"></span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><select id="growthMode" hidden><option value="0">仅选区及接缝</option><option value="0.08" selected>小范围 · 默认</option><option value="0.20">适中范围</option><option value="0.35">更大范围</option><option value="0.65">宽范围</option></select></div></details>
 
-    <aside class="panel library">
-      <div class="library-head"><h2>项目</h2><button class="icon-button" id="refreshProjects" title="刷新">↻</button></div>
-      <label class="search"><span>⌕</span><input id="projectSearch" placeholder="搜索项目"></label>
-      <div class="project-list" id="projectList"></div>
-      <div class="tasks-head"><h2>任务记录</h2><span>成功与失败都会保留</span></div>
-      <div class="task-list" id="taskList"><p class="quiet">还没有任务记录。</p></div>
-    </aside>
-  </main>
-
-  <div class="toast" id="toast"></div>
-  <script src="/static/app.js"></script>
-</body>
-</html>
+   </div>
+  </div>
+  <div class="editor-footer"><p id="saveStatus" class="helper sr-only" role="status"></p><p id="generationAvailability" class="helper">上传图片后开始编辑</p><p id="generationError" class="inline-error hidden" role="alert"></p><button id="generateButton" class="primary full" disabled>生成修改 <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button></div>
+ </aside>
+ <section class="stage-column" aria-label="图片画布">
+  <div class="stage-toolbar"> <div class="project-heading"><button id="renameProject" class="project-title" disabled title="重命名项目">图片预览</button></div><div class="source-info"><span id="sourceLabel">画布</span><small id="imageSize"></small></div><div class="canvas-tools"><button id="toggleOverlay" disabled aria-pressed="false">显示选区</button><button id="compareButton" class="hidden" disabled aria-pressed="false">对比</button><div class="zoom-controls" role="group" aria-label="画布缩放"><button id="zoomOut" disabled aria-label="缩小画布">−</button><button id="fitCanvas" disabled title="适合窗口">适合</button><button id="zoomIn" disabled aria-label="放大画布">＋</button></div><button id="openEditor" class="mobile-only" disabled>编辑</button><button id="openCanvasTools" type="button" aria-label="画布工具与图片信息" title="画布工具与图片信息">⋯</button></div></div>
+  <div class="stage-viewport">
+  <div class="stage" id="stage" tabindex="0" aria-label="图片编辑画布；框选也可通过输入选区坐标完成"><div class="empty-state" id="emptyState"><h2>把图片拖到这里</h2><p>框出要修改的位置，写下你的想法。</p><button id="uploadButton" class="primary"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4"/></svg> 选择图片</button><small>PNG、JPG、WEBP</small></div><canvas id="stageCanvas" class="hidden" aria-label="当前图片与选区预览"></canvas><div id="compareView" class="compare-view hidden"><figure><figcaption>本次修改前</figcaption><img id="compareOriginal" alt="本次修改的底图"></figure><figure><figcaption>当前版本</figcaption><img id="compareResult" alt="当前结果"></figure></div><div id="imageLoading" class="stage-loading hidden" role="status">正在载入图片…</div></div>
+  <button id="deleteProject" class="delete-icon preview-delete hidden" type="button" disabled aria-label="删除素材" title="删除素材"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+  <div id="taskProgress" class="task-progress hidden" role="status"><span id="taskStage">等待执行</span><span id="taskElapsed"></span><button id="viewRunningTask" class="text-button">查看任务</button></div>
+  <section id="filmstrip" class="filmstrip hidden" aria-label="项目版本"><div class="filmstrip-head"><h2>版本</h2><span id="versionCount"></span></div><div id="versionList" class="version-list"></div></section>
+ </section>
+</main>
+<input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+<dialog id="libraryDialog" class="drawer"><div class="dialog-head"><h2 id="libraryTitle">项目</h2><button data-close="libraryDialog" aria-label="关闭项目与任务面板">关闭</button></div><div class="segmented drawer-tabs"><button id="projectsTab" aria-pressed="true">项目</button><button id="tasksTab" aria-pressed="false">当前项目任务<span id="taskCount" class="count hidden">0</span></button></div><div id="projectsPane"><label class="field"><span class="sr-only">搜索项目</span><input id="projectSearch" placeholder="搜索项目" autocomplete="off"></label><div id="projectList"></div></div><div id="tasksPane" class="hidden"><div id="taskList"></div></div></dialog>
+<dialog id="settingsDialog"><div class="dialog-head"><h2>服务状态</h2><button data-close="settingsDialog">关闭</button></div><div id="capabilityDetails"></div><p class="helper">服务密钥由本机后端环境变量配置，不保存在浏览器。</p><details class="advanced"><summary>本地配置说明</summary><p>智能选区：设置 <code>WAVESPEED_API_KEY</code>。图片生成：设置 <code>CATSCO_MASKED_IMAGE2_API_KEY</code> 与对应服务的 <code>CATSCO_MASKED_IMAGE2_BASE_URL</code>。修改环境后重启后端。</p></details><button id="refreshCapabilities" class="secondary full">重新检查状态</button></dialog>
+<dialog id="renameDialog"><form id="renameForm"><div class="dialog-head"><h2>重命名项目</h2><button type="button" data-close="renameDialog">关闭</button></div><label class="field"><span>项目名称</span><input id="projectName" maxlength="100" required autocomplete="off"></label><p id="renameError" class="inline-error hidden" role="alert"></p><button class="primary full">保存名称</button></form></dialog>
+<dialog id="exportDialog"><div class="dialog-head"><h2>导出图片</h2><button data-close="exportDialog">关闭</button></div><p id="exportLabel"></p><a id="downloadCurrent" class="button-link primary full" download>下载当前版本</a><a id="downloadOriginal" class="button-link secondary full" download>下载上传的原文件</a><p id="downloadStatus" class="helper" aria-live="polite">导出不包含选区颜色和边界线。</p></dialog>
+<dialog id="canvasToolsDialog"><div class="dialog-head"><h2>画布工具</h2><button data-close="canvasToolsDialog">关闭</button></div><p class="helper">在图片上拖拽框选；画布聚焦后，按住空格拖拽平移。</p><button id="coordinateButton" class="secondary full hidden">输入选区坐标</button><p id="imageInfo" class="helper"></p><p id="alphaNotice" class="notice hidden">透明原文件已保留，编辑使用白底副本。</p></dialog>
+<dialog id="coordinatesDialog"><form id="coordinatesForm"><div class="dialog-head"><h2>输入选区坐标</h2><button type="button" data-close="coordinatesDialog">关闭</button></div><p class="helper">按原始图片像素填写，左上角为0，0。</p><div class="coordinate-grid"><label class="field">左边 X<input id="boxX" type="number" min="0" value="0" required></label><label class="field">上边 Y<input id="boxY" type="number" min="0" value="0" required></label><label class="field">宽度<input id="boxW" type="number" min="4" value="100" required></label><label class="field">高度<input id="boxH" type="number" min="4" value="100" required></label></div><p id="coordinateError" class="inline-error hidden" role="alert"></p><button class="primary full">使用此选区</button></form></dialog>
+<dialog id="deleteDialog" aria-labelledby="deleteTitle" aria-describedby="deleteDescription deleteNote">
+ <div class="delete-heading"><span class="delete-symbol" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></svg></span><h2 id="deleteTitle">删除这份素材？</h2></div>
+ <div class="delete-target"><img id="deleteThumbnail" width="48" height="48" alt=""><div><p id="deleteName"></p><p id="deleteMeta"></p></div></div>
+ <p id="deleteDescription" class="delete-description"></p><p id="deleteNote" class="delete-note"></p>
+ <p id="deleteError" class="inline-error hidden" role="alert"></p>
+ <div class="delete-actions"><button data-close="deleteDialog" id="cancelDelete" type="button">取消</button><button id="confirmDelete" class="danger-button" type="button">删除素材</button></div>
+</dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div><script type="module" src="static/app.js?v=37"></script>
+</body></html>

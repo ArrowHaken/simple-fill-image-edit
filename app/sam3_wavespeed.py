@@ -4,8 +4,6 @@ from pathlib import Path
 from typing import Any
 import json
 import mimetypes
-import shutil
-import subprocess
 import time
 
 import numpy as np
@@ -17,24 +15,6 @@ from .config import settings
 
 class WaveSpeedError(RuntimeError):
     pass
-
-
-def _curl_upload(path: Path, upload: dict[str, Any]) -> None:
-    """Fallback for hosts where Python/OpenSSL drops WaveSpeed's S3 PUT."""
-    executable = shutil.which("curl")
-    if not executable:
-        raise WaveSpeedError("curl is unavailable for the media-upload fallback")
-    method = str(upload.get("method", "PUT")).upper()
-    if method not in {"PUT", "POST"}:
-        raise WaveSpeedError(f"unsupported media upload method: {method}")
-    command = [executable, "--fail", "--silent", "--show-error", "--request", method]
-    for name, value in upload.get("headers", {}).items():
-        command.extend(["--header", f"{name}: {value}"])
-    command.extend(["--upload-file", str(path), upload["url"]])
-    completed = subprocess.run(command, capture_output=True, text=True, timeout=330)
-    if completed.returncode:
-        detail = completed.stderr.strip().replace("\n", " ")[:500]
-        raise WaveSpeedError(f"curl media upload failed: {detail or completed.returncode}")
 
 
 _PROMPT_ALIASES = {
@@ -50,6 +30,13 @@ _PROMPT_ALIASES = {
     "白猫": "white cat", "长毛猫": "long-haired cat",
 }
 
+# A project may ask SAM3 for the same source more than once (for example, a
+# target followed by a protected foreground object).  WaveSpeed accepts the
+# uploaded media URL, so reuse a recent ticket instead of uploading identical
+# bytes again.  The short TTL avoids depending on an indefinitely valid URL.
+_UPLOAD_CACHE: dict[tuple[str, int, int], tuple[str, float]] = {}
+_UPLOAD_CACHE_TTL = 300.0
+
 
 def _provider_prompt(value: str) -> str:
     clean = value.strip()
@@ -57,9 +44,15 @@ def _provider_prompt(value: str) -> str:
 
 
 def _api_key() -> str:
-    if not settings.wavespeed_api_key:
-        raise WaveSpeedError("WAVESPEED_API_KEY is not configured")
-    return settings.wavespeed_api_key
+    env = __import__("os").environ.get("WAVESPEED_API_KEY", "").strip()
+    if env:
+        return env
+    if not settings.wavespeed_key_file.is_file():
+        raise WaveSpeedError("未找到 WaveSpeed API Key 文件")
+    key = settings.wavespeed_key_file.read_text(encoding="utf-8").strip()
+    if not key:
+        raise WaveSpeedError("WaveSpeed API Key 文件为空")
+    return key
 
 
 def _headers() -> dict[str, str]:
@@ -67,9 +60,15 @@ def _headers() -> dict[str, str]:
 
 
 def upload_image(path: Path) -> str:
+    stat = path.stat()
+    cache_key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    now = time.monotonic()
+    cached = _UPLOAD_CACHE.get(cache_key)
+    if cached and now - cached[1] < _UPLOAD_CACHE_TTL:
+        return cached[0]
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     response = requests.post(
-        f"{settings.wavespeed_base_url}/media/uploads",
+        f"{settings.wavespeed_base}/media/uploads",
         headers={**_headers(), "Content-Type": "application/json"},
         json={"filename": path.name, "size": path.stat().st_size, "content_type": mime},
         timeout=(10, 60),
@@ -80,32 +79,22 @@ def upload_image(path: Path) -> str:
         raise WaveSpeedError(body.get("message") or "创建上传票据失败")
     ticket = body["data"]
     upload = ticket["upload"]
-    last_error: Exception | None = None
-    for attempt in range(3):
-        try:
-            with path.open("rb") as stream:
-                pushed = requests.request(
-                    upload.get("method", "PUT"),
-                    upload["url"],
-                    headers=upload.get("headers", {}),
-                    data=stream,
-                    timeout=(10, 300),
-                )
-            pushed.raise_for_status()
-            last_error = None
-            break
-        except requests.RequestException as exc:
-            last_error = exc
-            if attempt < 2:
-                time.sleep(1.5 * (attempt + 1))
-    if last_error is not None:
-        try:
-            _curl_upload(path, upload)
-        except Exception as curl_error:
-            raise WaveSpeedError(
-                f"SAM3 media upload failed after requests and curl fallback: {curl_error}"
-            ) from last_error
-    return ticket["download_url"]
+    with path.open("rb") as stream:
+        pushed = requests.request(
+            upload.get("method", "PUT"),
+            upload["url"],
+            headers=upload.get("headers", {}),
+            data=stream,
+            timeout=(10, 300),
+        )
+    pushed.raise_for_status()
+    download_url = ticket["download_url"]
+    _UPLOAD_CACHE[cache_key] = (download_url, now)
+    # Bound memory if a long-lived worker sees many one-off uploads.
+    for key, (_, created) in list(_UPLOAD_CACHE.items()):
+        if now - created >= _UPLOAD_CACHE_TTL:
+            _UPLOAD_CACHE.pop(key, None)
+    return download_url
 
 
 def _unwrap(body: dict[str, Any]) -> dict[str, Any]:
@@ -227,7 +216,9 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
 
     with Image.open(image_path) as image:
         width, height = image.size
+    started = time.monotonic()
     download_url = upload_image(image_path)
+    uploaded_at = time.monotonic()
     payload: dict[str, Any] = {
         "image": download_url,
         "point_prompts": points,
@@ -243,8 +234,9 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
     if prompt.strip() and not points and not boxes:
         prompt_sent = _provider_prompt(prompt)[:32]
         payload["prompt"] = prompt_sent
+    submitted_at = time.monotonic()
     response = requests.post(
-        f"{settings.wavespeed_base_url}/wavespeed-ai/sam3-image-rle",
+        f"{settings.wavespeed_base}/wavespeed-ai/sam3-image-rle",
         headers={**_headers(), "Content-Type": "application/json"},
         json=payload,
         timeout=(10, 60),
@@ -259,9 +251,11 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
     if not prediction_id:
         raise WaveSpeedError("SAM3 提交响应没有 prediction id")
     result_url = task.get("urls", {}).get("get") or (
-        f"{settings.wavespeed_base_url}/predictions/{prediction_id}/result"
+        f"{settings.wavespeed_base}/predictions/{prediction_id}/result"
     )
-    deadline = time.monotonic() + timeout_seconds
+    submitted_done_at = time.monotonic()
+    deadline = submitted_done_at + timeout_seconds
+    poll_count = 0
     while True:
         status = task.get("status")
         if status == "completed":
@@ -270,12 +264,21 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
             raise WaveSpeedError(task.get("error") or f"SAM3 任务状态：{status}")
         if time.monotonic() >= deadline:
             raise WaveSpeedError(f"SAM3 轮询超时；prediction_id={prediction_id}")
-        time.sleep(1.5)
+        # Poll more responsively than the old 1.5 s cadence; the provider's
+        # queue dominates total latency, while this removes up to 0.7 s after
+        # inference completes.
+        time.sleep(0.8)
+        poll_count += 1
         polled = requests.get(result_url, headers=_headers(), timeout=(10, 60))
         polled.raise_for_status()
         task = _unwrap(polled.json())
 
     outputs = _resolve_outputs(task.get("outputs", []))
+    debug_path = settings.data_dir / "sam3-last-output.json"
+    try:
+        debug_path.write_text(json.dumps(outputs, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, TypeError):
+        pass
     rles = _collect_rles(outputs, (width, height))
     masks = [_decode_rle(item) for item in rles]
     mask = _choose_mask(masks, points)
@@ -287,7 +290,13 @@ def segment(image_path: Path, *, points: list[dict[str, int]],
         "model": "wavespeed-ai/sam3-image-rle",
         "prediction_id": prediction_id,
         "status": task.get("status"),
-        "timings": task.get("timings", {}),
+        "timings": {
+            **task.get("timings", {}),
+            "upload_ms": round((uploaded_at - started) * 1000),
+            "submit_ms": round((submitted_done_at - uploaded_at) * 1000),
+            "wait_ms": round((time.monotonic() - submitted_done_at) * 1000),
+            "poll_count": poll_count,
+        },
         "mask_candidates": len(masks),
         "input_mode": "spatial" if points or boxes else "text",
         "prompt_sent": prompt_sent or None,
